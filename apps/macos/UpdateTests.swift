@@ -10,9 +10,12 @@ final class TestUpdateTransport: UpdateTransport {
     var releaseOverride:Data?
     let installer=Data("Disposable installer fixture — never opened by macOS".utf8)
     func release() throws -> Data {
-        try encoded(["tag_name":"v"+version,"draft":false,"prerelease":false,"assets":[
-            ["name":AppRelease.installerName,"state":"uploaded","size":installer.count,"browser_download_url":AppRelease.repository+"/releases/download/v"+version+"/"+AppRelease.installerName],
-            ["name":"SHA256SUMS.txt","state":"uploaded","size":100,"browser_download_url":AppRelease.repository+"/releases/download/v"+version+"/SHA256SUMS.txt"]]])
+        let base=AppRelease.repository+"/releases/download/v"+version+"/"
+        let assets:[Object]=[
+            ["name":AppRelease.installerName,"state":"uploaded","size":installer.count,"browser_download_url":base+AppRelease.installerName],
+            ["name":"SHA256SUMS.txt","state":"uploaded","size":100,"browser_download_url":base+"SHA256SUMS.txt"]]
+        let release:Object=["tag_name":"v"+version,"draft":false,"prerelease":false,"assets":assets]
+        return try encoded(release)
     }
     func data(from url:URL,limit:Int) async throws -> Data {
         if url==AppRelease.endpoint {checks+=1}
