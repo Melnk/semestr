@@ -68,8 +68,8 @@ export default function NotificationSettings({version,timezone,notify}:{version:
   </form>:!error&&<p className="muted">Загружаем настройки…</p>}
   {preferences?.enabled&&status&&<div className="notification-status" role="status">
    {status.authorization==='denied'?<><p>macOS не разрешает уведомления «Семестра». Откройте «Системные настройки → Уведомления → Семестр» и включите их.</p><button className="text-button" disabled={busy} onClick={()=>void nativeAction('notificationSystemSettings').catch(e=>setError(e.message))}>Открыть системные настройки <ExternalLink size={14}/></button></>:status.authorization==='notDetermined'?<><p>Разрешите «Семестру» показывать уведомления на этом Mac.</p><button className="outline" disabled={busy} onClick={()=>void authorize()}>Разрешить уведомления</button></>:permitted&&<>
-    <p>{status.pendingCount?`Запланировано напоминаний: ${status.pendingCount}.`:'Пока нет подходящих предстоящих пар и дедлайнов.'}</p>
-    {status.coveredUntil&&status.pendingCount>0&&<p>Они приходят и при закрытом приложении. Расписание подготовлено до {new Intl.DateTimeFormat('ru',{dateStyle:'medium',timeStyle:'short',timeZone:timezone}).format(new Date(status.coveredUntil))}. Откройте «Семестр» до этой даты, чтобы продлить его.</p>}
+    <p>{status.pendingCount?`Запланировано напоминаний: ${status.pendingCount}.`:'В подготовленном периоде пока нет подходящих пар и дедлайнов.'}</p>
+    {status.coveredUntil&&<p>{status.pendingCount>0&&'Запланированные напоминания приходят и при закрытом приложении. '}Расписание подготовлено до {new Intl.DateTimeFormat('ru',{dateStyle:'medium',timeStyle:'short',timeZone:timezone}).format(new Date(status.coveredUntil))}. Откройте «Семестр» до этой даты, чтобы продлить его.</p>}
     <p className="muted small">Показ баннеров и звук также зависят от настроек macOS и режима «Фокусирование».</p>
    </>}
   </div>}
