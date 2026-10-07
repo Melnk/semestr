@@ -40,7 +40,7 @@ enum CalendarRules {
         try check(end>start,"После перевода часов занятие заканчивается раньше начала. Уточните его время.")
         return(start,end)
     }
-    static func occurrences(_ records:[Object],_ exceptions:[Object],_ from:Date,_ until:Date) throws -> [Object] {
+    static func occurrences(_ records:[Object],_ exceptions:[Object],_ from:Date,_ until:Date,checkConflicts:Bool=true) throws -> [Object] {
         let subjects=Dictionary(uniqueKeysWithValues:records.filter{text(object($0,"data"),"kind")=="subject"}.map{(text($0,"id"),object($0,"data"))})
         var result=[Object]()
         for record in records where text(object(record,"data"),"kind")=="lesson" {
@@ -62,7 +62,7 @@ enum CalendarRules {
             for e in changes {if let s=instant(text(e,"startsAt")),let end=instant(text(e,"endsAt")){add(text(e,"originalDate"),s,end,true)}}
         }
         let snapshot=result
-        for i in result.indices {
+        for i in result.indices where checkConflicts {
             result[i]["conflict"]=snapshot.indices.contains{j in i != j && text(snapshot[i],"startsAt") < text(snapshot[j],"endsAt") && text(snapshot[i],"endsAt") > text(snapshot[j],"startsAt")}
         }
         return result.sorted{text($0,"startsAt")<text($1,"startsAt")}

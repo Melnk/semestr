@@ -105,7 +105,7 @@ func runStoreTests() throws {
     let transferFile=directory.appendingPathComponent("settings.json")
     try encoded(settings).write(to:transferFile,options:.atomic)
     let fromFile=try JSONSerialization.jsonObject(with:Data(contentsOf:transferFile)) as! Object
-    try expect(Set(fromFile.keys)==["format","formatVersion","profile","appearance"],"settings export contains no account ID or study records")
+    try expect(Set(fromFile.keys)==["format","formatVersion","profile","appearance","notifications"],"settings export contains no account ID or study records")
     let destination=try LocalStore(directory:directory.appendingPathComponent("other-account"))
     func dest(_ path:String,_ method:String="GET",_ body:Object=[:]) throws -> Object {try destination.request(path:path,method:method,body:body) as! Object}
     let destinationID=text(object(try dest("/auth/session"),"account"),"id")

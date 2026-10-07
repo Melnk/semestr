@@ -21,8 +21,9 @@ for build_arch in "${build_archs[@]}"; do
   case "$build_arch" in arm64|x86_64) ;; *) echo "Неизвестная архитектура: $build_arch"; exit 1;; esac
   xcrun swiftc -swift-version 5 -O -target "$build_arch-apple-macosx13.0" \
     -module-cache-path "$PWD/.local/swift-module-cache" \
-    -framework AppKit -framework WebKit -framework UniformTypeIdentifiers -lsqlite3 \
+    -framework AppKit -framework UserNotifications -framework WebKit -framework UniformTypeIdentifiers -lsqlite3 \
     apps/macos/Store.swift apps/macos/Rules.swift apps/macos/CalendarRules.swift \
+    apps/macos/Reminders.swift apps/macos/NotificationService.swift apps/macos/ReminderTests.swift \
     apps/macos/Tests.swift apps/macos/main.swift -o "$stage/Semestr-$build_arch"
 done
 xcrun lipo -create "$stage"/Semestr-* -output "$app/Contents/MacOS/Semestr"
@@ -36,8 +37,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>Семестр</string>
   <key>CFBundleDisplayName</key><string>Семестр</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.3.2</string>
-  <key>CFBundleVersion</key><string>5</string>
+  <key>CFBundleShortVersionString</key><string>0.4.0</string>
+  <key>CFBundleVersion</key><string>6</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.education</string>
@@ -47,6 +48,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 "$app/Contents/MacOS/Semestr" --self-test
+"$app/Contents/MacOS/Semestr" --notification-self-test
 "$app/Contents/MacOS/Semestr" --make-icon "$stage/icon.png"
 mkdir "$stage/AppIcon.iconset"
 for size in 16 32 128 256 512; do

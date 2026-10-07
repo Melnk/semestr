@@ -15,3 +15,7 @@ export function emptyData(kind:Data['kind'],subjectId:string,timezone:string,wee
 export function typed<T extends Data>(records:StudyRecord[],kind:T['kind']){return records.filter(r=>r.data.kind===kind) as StudyRecord<T>[]}
 export const activeDebt=(r:StudyRecord<Debt>)=>r.data.status!=='closed';
 export const activeTask=(r:StudyRecord<Task>)=>r.data.status!=='accepted';
+
+export function sortSubjects(subjects:StudyRecord<Subject>[]):StudyRecord<Subject>[] {
+ return [...subjects].sort((a,b)=>Number(b.data.assessment==='exam')-Number(a.data.assessment==='exam')||a.data.title.localeCompare(b.data.title,'ru',{sensitivity:'base'})||a.id.localeCompare(b.id));
+}

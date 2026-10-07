@@ -15,7 +15,9 @@ export type Occurrence=S['Occurrence'];
 export type LessonException=Required<S['ExceptionData']>;
 export type Bundle={formatVersion:number;profile:Profile;records:StudyRecord[];exceptions:LessonException[]};
 export type Appearance={theme:'light'|'dark'};
-export type SettingsBundle={format:'semestr-settings';formatVersion:1;profile:Profile;appearance:Appearance};
+export type NotificationPreferences={enabled:boolean;lessonsEnabled:boolean;lessonTypes:string[];lessonMinutes:number;deadlinesEnabled:boolean;deadlineMinutes:number[];debtTime:string;sound:boolean};
+export type NotificationStatus={authorization:'notDetermined'|'denied'|'authorized'|'provisional';pendingCount:number;coveredUntil:string|null;truncated:boolean;error:string};
+export type SettingsBundle={format:'semestr-settings';formatVersion:1;profile:Profile;appearance:Appearance;notifications?:NotificationPreferences};
 export type SettingsPreview={bundle:SettingsBundle;expectedRevision:number};
 export type SettingsApplied={account:Account;appearance:Appearance};
 export class ApiError extends Error { constructor(public status:number,public code:string,message:string){super(message)} }

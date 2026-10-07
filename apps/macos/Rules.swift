@@ -9,10 +9,12 @@ enum Rules {
     static func settingsBundle(_ p:Object) throws {
         try check(text(p,"format") == "semestr-settings","Это не файл настроек Семестра. Выберите файл, сохранённый в разделе «Перенос настроек».")
         guard let version=p["formatVersion"] as? NSNumber,CFGetTypeID(version) != CFBooleanGetTypeID(),version.doubleValue == 1 else { try fail("Версия файла настроек не поддерживается") }
-        try check(Set(p.keys) == ["format","formatVersion","profile","appearance"],"В файле настроек есть неизвестные или пропущенные поля")
+        let required:Set<String>=["format","formatVersion","profile","appearance"]
+        try check(Set(p.keys)==required || Set(p.keys)==required.union(["notifications"]),"В файле настроек есть неизвестные или пропущенные поля")
         try check(try encoded(p).count <= 64_000,"Файл настроек должен быть меньше 64 КБ")
         try profile(object(p,"profile"))
         try appearance(object(p,"appearance"))
+        if p["notifications"] != nil {try ReminderPreferences.validate(object(p,"notifications"))}
     }
     static func profile(_ p: Object) throws {
         let keys: Set<String> = ["name","university","direction","group","timezone","semester","weekOne","onboarded"]

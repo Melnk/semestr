@@ -2,9 +2,10 @@ import AppKit
 import WebKit
 import UniformTypeIdentifiers
 
-final class DesktopBridge: NSObject, WKScriptMessageHandlerWithReply {
+@MainActor final class DesktopBridge: NSObject, WKScriptMessageHandlerWithReply {
     let store: LocalStore
     let assets: URL
+    var notifications:NotificationService?
     private let testTransferDirectory:URL?
     init(store:LocalStore,assets:URL,testTransferDirectory:URL?=nil){self.store=store;self.assets=assets;self.testTransferDirectory=testTransferDirectory}
     private func chooseTransferFile(settings:Bool,saving:Bool,completion:@escaping(URL?)->Void){
@@ -27,7 +28,19 @@ final class DesktopBridge: NSObject, WKScriptMessageHandlerWithReply {
         func failure(_ error:Error){let e=error as? LocalError;replyHandler(["ok":false,"status":e?.status ?? 500,"code":e?.code ?? "storage","message":e?.message ?? "Не удалось выполнить действие. Данные не изменены."],nil)}
         do {
             switch text(request,"action") {
-            case "api": success(try store.request(path:text(request,"path"),method:text(request,"method"),body:object(request,"body")))
+            case "api":
+                let result=try store.request(path:text(request,"path"),method:text(request,"method"),body:object(request,"body"))
+                if text(request,"method") != "GET" {notifications?.refresh()}
+                success(result)
+            case "notificationStatus", "notificationPermission":
+                guard let notifications=notifications else{try fail("Уведомления недоступны")}
+                Task { @MainActor in
+                    do {success(try await (text(request,"action")=="notificationPermission" ? notifications.requestPermission():notifications.status()))}
+                    catch {failure(LocalError(status:500,code:"notifications",message:"Не удалось запросить разрешение macOS. Откройте системные настройки уведомлений."))}
+                }
+            case "notificationSystemSettings":
+                if testTransferDirectory==nil {NSWorkspace.shared.open(URL(fileURLWithPath:"/System/Applications/System Settings.app"))}
+                success()
             case "copy":
                 let value=text(request,"text");try check(value.utf8.count<=2_000_000,"Текст слишком большой")
                 NSPasteboard.general.clearContents();NSPasteboard.general.setString(value,forType:.string);success()
@@ -60,12 +73,15 @@ final class DesktopBridge: NSObject, WKScriptMessageHandlerWithReply {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
     var window:NSWindow!
     var webView:WKWebView!
     var bridge:DesktopBridge!
     let testing=CommandLine.arguments.contains("--ui-test")
     var testStarted=false
+    var notificationService:NotificationService?
+    var reminderTimer:Timer?
+    var pendingSubjectID:String?
     func applicationDidFinishLaunching(_ notification:Notification){
         do {
             let resources=Bundle.main.resourceURL!
@@ -74,6 +90,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             if testing{directory=FileManager.default.temporaryDirectory.appendingPathComponent("semestr-ui-"+newID())}
             else{directory=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("Semestr")}
             bridge=DesktopBridge(store:try LocalStore(directory:directory),assets:assets,testTransferDirectory:testing ? directory:nil)
+            let delivery:ReminderDelivery
+            if testing {delivery=TestReminderDelivery()}
+            else {
+                let native=MacReminderDelivery()
+                native.onOpen={ [weak self] id in self?.showReminderSubject(id) }
+                native.shouldPresent={ [weak self] in (try? self?.bridge.store.reminderSnapshot()).map{object($0,"notifications")["enabled"] as? Bool==true} ?? false }
+                delivery=native
+            }
+            let notifications=NotificationService(store:bridge.store,delivery:delivery)
+            notificationService=notifications;bridge.notifications=notifications
+            notifications.refresh()
+            reminderTimer=Timer.scheduledTimer(withTimeInterval:60,repeats:true){ [weak self] _ in Task { @MainActor in self?.notificationService?.refresh() } }
+            NSWorkspace.shared.notificationCenter.addObserver(self,selector:#selector(refreshReminders),name:NSWorkspace.didWakeNotification,object:nil)
             let controller=WKUserContentController()
             controller.addScriptMessageHandler(bridge,contentWorld:.page,name:"semestr")
             controller.addUserScript(WKUserScript(source:"document.addEventListener('DOMContentLoaded',()=>document.documentElement.classList.add('native-app'));",injectionTime:.atDocumentStart,forMainFrameOnly:true))
@@ -94,6 +123,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             if testing{finishTest(false,"Native launch failed: \(error)");return}
             let alert=NSAlert();alert.messageText="Не удалось открыть Семестр";alert.informativeText=(error as? LocalError)?.message ?? error.localizedDescription;alert.alertStyle = .critical;alert.runModal();NSApp.terminate(nil)
         }
+    }
+    @objc func refreshReminders(){notificationService?.refresh()}
+    func applicationDidBecomeActive(_ notification:Notification){notificationService?.refresh()}
+    func showReminderSubject(_ id:String){
+        pendingSubjectID=id
+        window?.makeKeyAndOrderFront(nil);NSApp.activate(ignoringOtherApps:true)
+        if webView?.isLoading==false {openReminderSubject()}
+    }
+    private func openReminderSubject(){
+        guard let id=pendingSubjectID,let data=try? encoded(id),let value=String(data:data,encoding:.utf8) else{return}
+        webView.evaluateJavaScript("window.semestrPendingSubject="+value+";window.dispatchEvent(new CustomEvent('semestr:show-subject',{detail:"+value+"}))",completionHandler:nil)
+        pendingSubjectID=nil
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool{true}
     func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows flag:Bool)->Bool{window.makeKeyAndOrderFront(nil);return true}
@@ -126,7 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         if let url=action.request.url{openExternal(url)};return nil
     }
     private func openExternal(_ url:URL){if ["http","https"].contains(url.scheme ?? "") && url.user==nil && url.password==nil{NSWorkspace.shared.open(url)}}
-    func webView(_ webView:WKWebView,didFinish navigation:WKNavigation!){if testing && !testStarted{testStarted=true;runUITest()}}
+    func webView(_ webView:WKWebView,didFinish navigation:WKNavigation!){openReminderSubject();if testing && !testStarted{testStarted=true;runUITest()}}
     func webView(_ webView:WKWebView,didFailProvisionalNavigation navigation:WKNavigation!,withError error:Error){if testing{finishTest(false,"Loading local UI failed: \(error)")}}
     private func runUITest(){
         let script="""
@@ -302,6 +343,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         if(!practice.querySelector('.lesson-badge')?.title.includes('Практика')||!lecture.querySelector('.lesson-badge')?.title.includes('Лекция'))throw new Error('Calendar lesson labels missing');
         if(getComputedStyle(practice).backgroundColor===getComputedStyle(lecture).backgroundColor||parseFloat(getComputedStyle(practice).borderLeftWidth)<=parseFloat(getComputedStyle(lecture).borderLeftWidth))throw new Error('Practice is not visually emphasized');
         if(!document.querySelector('.timeline-event.overlap .lesson-badge')||!document.querySelector('.day-lesson-marks .lesson-practice'))throw new Error('Conflict or date-strip type marker missing');
+        const native=async(action)=>{
+            const reply=await window.webkit.messageHandlers.semestr.postMessage({action});
+            if(!reply.ok)throw new Error(reply.message);return reply.data;
+        };
+        await request('/records','POST',{data:{kind:'subject',title:'Язык',assessment:'credit'}});
+        await request('/records','POST',{data:{kind:'subject',title:'Экзамен по алгебре',assessment:'exam'}});
+        await request('/records','POST',{data:{kind:'task',subjectId:record.id,title:'Проект к дедлайну',deadline:new Date(Date.now()+3*86400000).toISOString()}});
+        document.dispatchEvent(new Event('visibilitychange'));
+        [...document.querySelectorAll('nav button')].find(b=>b.textContent.includes('Предметы')).click();
+        await until(()=>document.querySelectorAll('.full-row').length===4,'Sorting fixtures missing');
+        if(!document.querySelector('.full-row').textContent.includes('Экзамен по алгебре'))throw new Error('Exam subjects are not first');
+        [...document.querySelectorAll('.sidebar-bottom button')].find(b=>b.textContent.includes('Настройки')).click();
+        await until(()=>document.querySelector('#notification-enabled'),'Notification settings missing');
+        if(document.querySelector('#notification-enabled').checked)throw new Error('Notifications must be opt-in');
+        document.querySelector('#notification-enabled').click();
+        document.querySelector('#notification-sound').click();
+        document.querySelector('.notification-settings button.primary').click();
+        await until(()=>document.querySelector('.toast')?.textContent.includes('Настройки уведомлений сохранены'),'Notification settings save failed');
+        const prefs=await request('/notifications');
+        if(!prefs.enabled||prefs.sound||prefs.lessonMinutes!==5||prefs.lessonTypes.join(',')!=='practice'||prefs.deadlineMinutes.join(',')!=='60,1440')throw new Error('Notification preferences not persisted');
+        const enabledStatus=await native('notificationStatus');
+        if(enabledStatus.authorization!=='authorized'||enabledStatus.pendingCount<2)throw new Error('Notifications not scheduled after enabling');
+        const file=await request('/settings/export');
+        if(!file.notifications.enabled)throw new Error('Notifications missing from settings transfer');
+        document.querySelector('#notification-enabled').click();
+        document.querySelector('.notification-settings button.primary').click();
+        await until(()=>document.querySelector('.toast')?.textContent.includes('Уведомления отключены'),'Notification disable failed');
+        if((await native('notificationStatus')).pendingCount!==0)throw new Error('Disable left pending notifications');
+        await request('/settings/import','POST',await request('/settings/preview','POST',file));
+        document.dispatchEvent(new Event('visibilitychange'));
+        await until(()=>document.querySelector('#notification-enabled')?.checked,'Imported notification preferences did not update UI');
+        if((await native('notificationStatus')).pendingCount<2)throw new Error('Import did not restore reminder schedule');
+        if(testView!=='notifications'){
+            [...document.querySelectorAll('nav button')].find(b=>b.textContent.includes('Неделя')).click();
+            await until(()=>document.querySelector('.time-grid'),'Calendar not restored');
+        }else{
+            document.querySelector('.notification-settings').scrollIntoView({block:'start'});
+        }
         const toast=document.querySelector('.toast .icon-button');if(toast)toast.click();
         if(testView==='time'){
             await openLesson();
@@ -309,7 +388,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             await clickTime(field);await clickTime(field);
         }
         await wait(350);
-        return {subjectSaved:true,noteSaved:true,profileSaved:true,themes:true,settingsFileRoundtrip:true,previewCancellation:true,studyDataPreserved:true,titleOnlyDebt:true,debtDraftRestored:true,existingSubjectReused:true,requirements:true,timeClickToggle:true,timeKeyboard:true,timePasteValidation:true,lessonTimesPersisted:true,calendarTypes:true,practiceEmphasis:true,theme:testTheme,networkResources:performance.getEntriesByType('resource').filter(r=>/^https?:/.test(r.name)).length};
+        return {subjectSaved:true,noteSaved:true,profileSaved:true,themes:true,settingsFileRoundtrip:true,previewCancellation:true,studyDataPreserved:true,titleOnlyDebt:true,debtDraftRestored:true,existingSubjectReused:true,requirements:true,timeClickToggle:true,timeKeyboard:true,timePasteValidation:true,lessonTimesPersisted:true,calendarTypes:true,practiceEmphasis:true,examsFirst:true,notifications:true,notificationDisable:true,notificationSettingsTransfer:true,theme:testTheme,networkResources:performance.getEntriesByType('resource').filter(r=>/^https?:/.test(r.name)).length};
         """
         webView.callAsyncJavaScript(script,arguments:["testTheme":ProcessInfo.processInfo.environment["SEMESTR_TEST_THEME"] ?? "dark","testView":ProcessInfo.processInfo.environment["SEMESTR_TEST_VIEW"] ?? "calendar"],in:nil,in:.page){result in
             switch result {
@@ -322,7 +401,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                         try? FileManager.default.createDirectory(atPath:directory,withIntermediateDirectories:true)
                         if let image=image,let tiff=image.tiffRepresentation,let bitmap=NSBitmapImageRep(data:tiff),let png=bitmap.representation(using:.png,properties:[:]){try? png.write(to:URL(fileURLWithPath:directory).appendingPathComponent("native-app.png"))}
                     }
-                    self.finishTest(error==nil,"Native UI: study data, settings transfer, readable requirements, time input and calendar types passed; zero HTTP resources. \(values)")
+                    self.finishTest(error==nil,"Native UI: study data, settings transfer, readable requirements, time input, calendar types, exam order and notifications passed; zero HTTP resources. \(values)")
                 }
             }
         }
@@ -350,14 +429,28 @@ func createIcon(_ output:String) throws {
     try png.write(to:URL(fileURLWithPath:output))
 }
 
+if CommandLine.arguments.contains("--notification-self-test") {
+    Task { @MainActor in
+        do{try await runDeliveryTests();exit(0)}catch{fputs("FAIL: \(error)\n",stderr);exit(1)}
+    }
+    RunLoop.main.run()
+}
+if CommandLine.arguments.contains("--notification-status") {
+    Task { @MainActor in
+        let delivery=MacReminderDelivery()
+        print("Notification authorization: \(await delivery.authorization()); pending: \(await delivery.pending().count)")
+        exit(0)
+    }
+    RunLoop.main.run()
+}
 if CommandLine.arguments.contains("--self-test") {
-    do{try runStoreTests();exit(0)}catch{fputs("FAIL: \(error)\n",stderr);exit(1)}
+    do{try runStoreTests();try runReminderTests();exit(0)}catch{fputs("FAIL: \(error)\n",stderr);exit(1)}
 }
 if let index=CommandLine.arguments.firstIndex(of:"--make-icon"),CommandLine.arguments.count>index+1{
     do{try createIcon(CommandLine.arguments[index+1]);exit(0)}catch{fputs("Icon failed: \(error)\n",stderr);exit(1)}
 }
 let app=NSApplication.shared
 app.setActivationPolicy(.regular)
-let delegate=AppDelegate()
+let delegate=MainActor.assumeIsolated { AppDelegate() }
 app.delegate=delegate
 app.run()

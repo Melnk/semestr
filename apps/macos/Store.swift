@@ -41,6 +41,10 @@ final class LocalStore {
         }
     }
     deinit { sqlite3_close(db) }
+    func reminderSnapshot() throws -> Object {
+        guard let state=try loadOptional() else{try fail("База не найдена",500,"storage")}
+        return ["notifications":state["notifications"] ?? ReminderPreferences.defaults,"profile":object(object(state,"account"),"profile"),"records":objects(state,"records"),"exceptions":objects(state,"exceptions")]
+    }
     private func sql(_ statement: String) throws {
         if sqlite3_exec(db, statement, nil, nil, nil) != SQLITE_OK { try fail("Не удалось записать данные. Закройте другие окна приложения и повторите.", 503, "storage") }
     }
@@ -86,6 +90,11 @@ final class LocalStore {
                 return ["account":account,"csrf":"local"]
             case ("GET", "/appearance"):
                 return state["appearance"] ?? ["theme":"light"]
+            case ("GET", "/notifications"):
+                return state["notifications"] ?? ReminderPreferences.defaults
+            case ("PUT", "/notifications"):
+                try ReminderPreferences.validate(body)
+                state["notifications"]=body;dirty=true;output=body
             case ("POST", "/appearance/initialize"), ("PUT", "/appearance"):
                 try Rules.appearance(body)
                 // On the first launch after upgrading, keep the previous WebKit theme.
@@ -93,7 +102,7 @@ final class LocalStore {
                 if text(object(state,"appearance"),"theme") == text(body,"theme") { return body }
                 state["appearance"] = body; dirty = true; output = body
             case ("GET", "/settings/export"):
-                return ["format":"semestr-settings","formatVersion":1,"profile":account["profile"]!,"appearance":state["appearance"] ?? ["theme":"light"]]
+                return ["format":"semestr-settings","formatVersion":1,"profile":account["profile"]!,"appearance":state["appearance"] ?? ["theme":"light"],"notifications":state["notifications"] ?? ReminderPreferences.defaults]
             case ("POST", "/settings/preview"):
                 try Rules.settingsBundle(body)
                 return ["bundle":body,"expectedRevision":number(account,"revision")]
@@ -104,6 +113,7 @@ final class LocalStore {
                 account["profile"] = imported["profile"]!
                 account["version"] = number(account,"version")+1
                 state["appearance"] = imported["appearance"]!
+                if let preferences=imported["notifications"] {state["notifications"]=preferences}
                 dirty = true
             case ("PUT", "/profile"):
                 try version(body, account)

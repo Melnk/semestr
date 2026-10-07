@@ -80,3 +80,23 @@
 .days .selected .day-lesson-marks i{background:currentColor}
 
 @media(max-width:650px){.timeline-event.is-compact .event-time{font-size:11px;white-space:normal}.timeline-event.is-compact .event-time{word-spacing:3px}}
+
+.notification-settings h2{display:flex;align-items:center;gap:10px}
+.notification-settings>p{margin-top:12px}
+.notification-master{margin:20px 0 12px;font-size:14px;font-weight:550}
+.notification-settings fieldset{border:0;padding:0;margin:0;min-width:0}
+.notification-settings fieldset:disabled{opacity:.55}
+.notification-settings fieldset:disabled fieldset:disabled{opacity:1}
+.notification-settings legend{font-size:11px;color:var(--muted);margin:0 0 12px;padding:0}
+.notification-group{border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:15px;background:var(--paper2)}
+.notification-group>label{font-weight:550;font-size:13px}
+.notification-choices{display:flex;flex-wrap:wrap;gap:6px 18px;margin-bottom:14px}
+.notification-choices label{margin-bottom:6px}
+.notification-settings input[type=number]{max-width:120px}
+.notification-debt-time{max-width:330px}
+.notification-status{margin-top:18px;border-left:3px solid var(--green);padding-left:14px;font-size:12px;line-height:1.7}
+.notification-status p+p{margin-top:8px}
+.notification-status .outline{margin-top:10px}
+.notification-settings .error .text-button{display:block}
+
+.notification-settings{scroll-margin-top:80px}

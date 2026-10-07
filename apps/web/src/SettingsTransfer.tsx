@@ -31,7 +31,7 @@ export default function SettingsTransfer({onApplied,notify}:{onApplied:(result:S
  return <section className="settings-transfer" aria-labelledby="settings-transfer-heading">
   <h2 id="settings-transfer-heading">Перенос настроек</h2>
   <p className="muted">Сохраните файл и передайте его на другой Mac. Там откройте этот раздел в «Семестре» под нужной учётной записью и загрузите файл.</p>
-  <p className="muted small">В файл входят сохранённый профиль, семестр, часовой пояс, начало учебной недели и тема оформления. Сначала сохраните изменения в профиле выше.</p>
+  <p className="muted small">В файл входят сохранённый профиль, семестр, часовой пояс, начало учебной недели тема оформления и настройки уведомлений. Сначала сохраните изменения в профиле выше.</p>
   <div className="button-row">
    <button className="outline" disabled={busy} onClick={()=>void saveFile()}><Download size={17}/> Сохранить настройки в файл</button>
    <button className="outline" disabled={busy} onClick={()=>void chooseFile()}><Upload size={17}/> Загрузить настройки из файла</button>
@@ -40,9 +40,10 @@ export default function SettingsTransfer({onApplied,notify}:{onApplied:(result:S
    <h3>Настройки из файла</h3>
    <dl className="facts">
     {([['name','Имя'],['university','Университет'],['direction','Направление'],['group','Группа'],['semester','Семестр'],['timezone','Часовой пояс'],['weekOne','Начало учебной недели № 1']] as const).map(([key,label])=><div key={key}><dt>{label}</dt><dd>{preview.bundle.profile[key]||'Не указано'}</dd></div>)}
+    {preview.bundle.notifications&&<div><dt>Уведомления</dt><dd>{preview.bundle.notifications.enabled?'Включены':'Отключены'}. Разрешение macOS на этом компьютере настраивается отдельно.</dd></div>}
     <div><dt>Тема</dt><dd>{preview.bundle.appearance.theme==='dark'?'Тёмная':'Светлая'}</dd></div>
    </dl>
-   <p>Эти значения заменят текущий профиль и оформление. Предметы, задания, долги, заметки и расписание на этом Mac сохранятся.</p>
+   <p>Эти значения заменят текущий профиль, оформление и настройки уведомлений из файла. Предметы, задания, долги, заметки и расписание на этом Mac сохранятся.</p>
    <div className="button-row">
     <button className="primary" disabled={busy} onClick={()=>void apply()}>Применить настройки <ArrowRight size={16}/></button>
     <button className="text-button" disabled={busy} onClick={()=>{setPreview(null);setError('')}}>Отмена</button>
