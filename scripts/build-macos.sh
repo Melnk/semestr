@@ -24,6 +24,7 @@ for build_arch in "${build_archs[@]}"; do
     -framework AppKit -framework UserNotifications -framework WebKit -framework UniformTypeIdentifiers -lsqlite3 \
     apps/macos/Store.swift apps/macos/Rules.swift apps/macos/CalendarRules.swift \
     apps/macos/Reminders.swift apps/macos/NotificationService.swift apps/macos/ReminderTests.swift \
+    apps/macos/Updates.swift apps/macos/UpdateTests.swift \
     apps/macos/Tests.swift apps/macos/main.swift -o "$stage/Semestr-$build_arch"
 done
 xcrun lipo -create "$stage"/Semestr-* -output "$app/Contents/MacOS/Semestr"
@@ -37,8 +38,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>Семестр</string>
   <key>CFBundleDisplayName</key><string>Семестр</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.4.1</string>
-  <key>CFBundleVersion</key><string>7</string>
+  <key>CFBundleShortVersionString</key><string>0.5.0</string>
+  <key>CFBundleVersion</key><string>8</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.education</string>
@@ -49,6 +50,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 PLIST
 "$app/Contents/MacOS/Semestr" --self-test
 "$app/Contents/MacOS/Semestr" --notification-self-test
+"$app/Contents/MacOS/Semestr" --update-self-test
 "$app/Contents/MacOS/Semestr" --make-icon "$stage/icon.png"
 mkdir "$stage/AppIcon.iconset"
 for size in 16 32 128 256 512; do
