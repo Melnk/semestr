@@ -1,0 +1,46 @@
+name: Publish macOS release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag, for example v0.3.1
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v7.0.0
+        with: {node-version: '24'}
+      - uses: pnpm/action-setup@v6.1.0
+        with: {version: 11.25.0}
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          app_version="$(node -p 'require("./package.json").version')"
+          test "$RELEASE_TAG" = "v$app_version"
+          test -f "docs/releases/$RELEASE_TAG.md"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm desktop:release
+      - run: dist/Семестр.app/Contents/MacOS/Semestr --ui-test
+      - name: Publish checked DMG and ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          bundle_version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' dist/Семестр.app/Contents/Info.plist)"
+          test "$RELEASE_TAG" = "v$bundle_version"
+          gh release create "$RELEASE_TAG" dist/release/* --verify-tag --latest \
+            --title "Семестр $RELEASE_TAG" --notes-file "docs/releases/$RELEASE_TAG.md"

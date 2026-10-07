@@ -1,0 +1,6 @@
+import type {StudyRecord,Account} from '@semestr/api-client';
+import {emptyData} from './utils';
+const subjects=['Практикум по командной разработке','Инновационная экономика и технологическое предпринимательство','Основы финансовой грамотности','Проектный практикум'];
+const teachers=['Александра Миронова','Михаил Леснов','Елена Ветрова','Александра Миронова'];
+export const demoAccount:Account={id:'demo',email:'student@example.com',version:0,revision:0,profile:{name:'Саша',university:'Университет',direction:'Информатика',group:'ИТ-204',timezone:'Asia/Yekaterinburg',semester:'Осень 2026',weekOne:'2026-08-31',onboarded:true}};
+export const demoRecords:StudyRecord[]=subjects.flatMap((title,i)=>[{id:`subject-${i}`,version:0,data:{...emptyData('subject','','',''),kind:'subject' as const,title,teacher:teachers[i],semester:'Осень 2026',description:'',contact:'',assessment:'unknown',requirements:'',admission:'',onlineUrl:'',links:[],status:'studying'}},{id:`debt-${i}`,version:0,data:{kind:'debt' as const,subjectId:`subject-${i}`,reason:'difference',deadline:i===3?'2027-05-15':'2026-12-15',requirements:i===2?'Уточнить список работ и формат дистанционной сдачи.':'',nextStep:'Получить требования к сдаче',teacher:teachers[i],status:'clarify',closedAt:null,confirmation:'',notes:''}}]);

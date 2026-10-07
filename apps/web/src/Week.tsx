@@ -1,0 +1,19 @@
+import type {Occurrence,Task,StudyRecord} from '@semestr/api-client';
+import {localDate,labels} from './utils';
+type Event={key:string;title:string;start:number;end:number;time:string;detail:string;conflict:boolean;task?:StudyRecord<Task>;occurrence?:Occurrence};
+export function daySegments(day:string,occurrences:Occurrence[],tasks:StudyRecord<Task>[],timezone:string):Event[]{
+ const dayOf=(s:string)=>new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(s));
+ const timeOf=(s:string)=>new Intl.DateTimeFormat('en-GB',{timeZone:timezone,hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(s));
+ const minutes=(s:string)=>{const[h,m]=timeOf(s).split(':').map(Number);return h*60+m};
+ const events:Event[]=occurrences.filter(o=>dayOf(o.startsAt)<=day&&dayOf(o.endsAt)>=day).flatMap(o=>{const start=dayOf(o.startsAt)<day?0:minutes(o.startsAt);const end=dayOf(o.endsAt)>day?1440:minutes(o.endsAt);if(end<=start)return[];return[{key:o.lessonId+o.originalDate,title:o.title,start,end,time:timeOf(o.startsAt)+'–'+timeOf(o.endsAt),detail:labels[o.type]+(o.room?' · '+o.room:''),conflict:o.conflict,occurrence:o}]});
+ tasks.filter(t=>t.data.deadline&&dayOf(t.data.deadline)===day).forEach(t=>events.push({key:t.id,title:t.data.title,start:minutes(t.data.deadline!),end:Math.min(1440,minutes(t.data.deadline!)+30),time:'Сдать '+timeOf(t.data.deadline!),detail:labels[t.data.status],conflict:false,task:t}));return events.sort((a,b)=>a.start-b.start)
+}
+export function layoutEvents(events:Event[]):Array<Event&{lane:number;lanes:number}>{
+ const result:Array<Event&{lane:number;lanes:number}>=[];let group:Event[]=[];let end=-1;
+ function flush(){if(!group.length)return;const occupied:number[]=[];const placed=group.map(e=>{let lane=occupied.findIndex(end=>end<=e.start);if(lane<0)lane=occupied.length;occupied[lane]=e.end;return{...e,lane}});result.push(...placed.map(e=>({...e,lanes:occupied.length})));group=[]}
+ for(const event of [...events].sort((a,b)=>a.start-b.start)){if(event.start>=end){flush();end=-1}group.push(event);end=Math.max(end,event.end)}flush();return result
+}
+export default function Week({days,occurrences,tasks,timezone,onLesson,onTask}:{days:Date[];occurrences:Occurrence[];tasks:StudyRecord<Task>[];timezone:string;onLesson:(o:Occurrence)=>void;onTask:(t:StudyRecord<Task>)=>void}){
+ const groups=days.map(d=>daySegments(localDate(d),occurrences,tasks,timezone));const all=groups.flat();const first=Math.min(8,...all.map(e=>Math.floor(e.start/60)));const last=Math.max(20,...all.map(e=>Math.ceil(e.end/60)));const height=(last-first)*54;
+ return <div className="time-grid"><div className="time-gutter"><div className="timeline-heading"/><div style={{height}}>{Array.from({length:last-first},(_,i)=><span style={{top:i*54}} key={i}>{String(first+i).padStart(2,'0')}:00</span>)}</div></div>{days.map((day,index)=><div className="timeline-day" key={localDate(day)}><header className="timeline-heading">{new Intl.DateTimeFormat('ru',{weekday:'short',day:'numeric'}).format(day)}</header><div className="timeline-body" style={{height}}>{layoutEvents(groups[index]).map(e=>{return <button className={'timeline-event '+(e.task?'deadline ':'')+(e.conflict?'overlap':'')} key={e.key} title={e.time+' · '+e.title} style={{top:(e.start-first*60)*.9,height:Math.max((e.end-e.start)*.9-3,32),left:`calc(${e.lane/e.lanes*100}% + 2px)`,width:`calc(${100/e.lanes}% - 4px)`}} onClick={()=>e.task?onTask(e.task):onLesson(e.occurrence!)}><span>{e.time}</span><strong>{e.title}</strong><small>{e.detail}</small>{e.conflict&&<small>Пересечение</small>}</button>})}{!groups[index].length&&<span className="timeline-empty">Свободно</span>}</div></div>)}</div>
+}

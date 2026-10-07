@@ -1,0 +1,68 @@
+name: Checks
+on: [push, pull_request]
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with: {node-version: '24'}
+      - uses: pnpm/action-setup@v6.1.0
+        with: {version: 11.25.0}
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm desktop:release
+      - name: Exercise native app with disposable study data
+        run: SEMESTR_TEST_OUTPUT="$RUNNER_TEMP/semestr-ui" dist/Семестр.app/Contents/MacOS/Semestr --ui-test
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: Semestr-macOS-universal
+          path: dist/release/*
+          retention-days: 14
+  web-and-api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: semestr
+          POSTGRES_USER: semestr
+          POSTGRES_PASSWORD: local-development-only
+        ports: ["54329:5432"]
+        options: >-
+          --health-cmd "pg_isready -U semestr"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+      mailpit:
+        image: axllent/mailpit:v1.29
+        ports: ["1025:1025", "8025:8025"]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with: {node-version: '24'}
+      - uses: pnpm/action-setup@v6.1.0
+        with: {version: 11.25.0}
+      - uses: actions/setup-java@v6.0.1
+        with: {distribution: temurin, java-version: 21, cache: maven}
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build && pnpm test
+      - run: mvn -B -f backend/pom.xml verify
+      - name: Start backend
+        run: |
+          java -jar backend/target/semestr-server-0.1.0.jar > /tmp/semestr-api.log 2>&1 &
+          for attempt in $(seq 1 45); do
+            if curl -fsS http://localhost:8080/actuator/health; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/semestr-api.log
+          exit 1
+      - run: python3 scripts/smoke.py
+      - name: Verify generated contract
+        run: |
+          curl -fsS http://localhost:8080/v3/api-docs > docs/openapi.json
+          pnpm api:generate
+          git diff --exit-code -- docs/openapi.json packages/api-client/src/schema.d.ts

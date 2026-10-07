@@ -1,0 +1,39 @@
+name: semestr
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: semestr
+      POSTGRES_USER: semestr
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-local-development-only}
+    ports: ["127.0.0.1:54329:5432"]
+    volumes: ["semestr-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U semestr"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+  mail:
+    image: axllent/mailpit:v1.29
+    ports: ["127.0.0.1:1025:1025", "127.0.0.1:8025:8025"]
+  backend:
+    profiles: ["full"]
+    build: {context: ../backend}
+    environment:
+      DATABASE_URL: jdbc:postgresql://db:5432/semestr
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-local-development-only}
+      SMTP_HOST: mail
+      SMTP_PORT: 1025
+      SERVER_ADDRESS: 0.0.0.0
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8088}
+      SECURE_COOKIE: ${SECURE_COOKIE:-false}
+    depends_on:
+      db: {condition: service_healthy}
+      mail: {condition: service_started}
+  web:
+    profiles: ["full"]
+    build: {context: .., dockerfile: infra/web.Dockerfile}
+    ports: ["127.0.0.1:8088:80"]
+    depends_on: [backend]
+volumes:
+  semestr-data:

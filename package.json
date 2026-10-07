@@ -1,0 +1,19 @@
+{
+  "name": "semestr",
+  "private": true,
+  "version": "0.3.1",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev": "pnpm --filter @semestr/web dev",
+    "build": "pnpm --filter @semestr/web build",
+    "test": "pnpm --filter @semestr/web test",
+    "api:generate": "openapi-typescript http://localhost:8080/v3/api-docs -o packages/api-client/src/schema.d.ts",
+    "desktop:dev": "bash scripts/build-macos.sh && open dist/Семестр.app",
+    "desktop:build": "bash scripts/build-macos.sh",
+    "desktop:test": "dist/Семестр.app/Contents/MacOS/Semestr --self-test",
+    "desktop:release": "bash scripts/package-macos.sh"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.13.0"
+  }
+}
