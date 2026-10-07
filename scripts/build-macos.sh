@@ -37,8 +37,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>Семестр</string>
   <key>CFBundleDisplayName</key><string>Семестр</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.4.0</string>
-  <key>CFBundleVersion</key><string>6</string>
+  <key>CFBundleShortVersionString</key><string>0.4.1</string>
+  <key>CFBundleVersion</key><string>7</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.education</string>

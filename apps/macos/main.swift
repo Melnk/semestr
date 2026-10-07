@@ -352,7 +352,7 @@ import UniformTypeIdentifiers
         await request('/records','POST',{data:{kind:'task',subjectId:record.id,title:'Проект к дедлайну',deadline:new Date(Date.now()+3*86400000).toISOString()}});
         document.dispatchEvent(new Event('visibilitychange'));
         [...document.querySelectorAll('nav button')].find(b=>b.textContent.includes('Предметы')).click();
-        await until(()=>document.querySelectorAll('.full-row').length===4,'Sorting fixtures missing');
+        await until(()=>document.querySelectorAll('.full-row').length===3,'Regular subject list or sorting fixtures missing');
         if(!document.querySelector('.full-row').textContent.includes('Экзамен по алгебре'))throw new Error('Exam subjects are not first');
         [...document.querySelectorAll('.sidebar-bottom button')].find(b=>b.textContent.includes('Настройки')).click();
         await until(()=>document.querySelector('#notification-enabled'),'Notification settings missing');
