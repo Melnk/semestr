@@ -89,7 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             window.makeKeyAndOrderFront(nil)
             if !testing{NSApp.activate(ignoringOtherApps:true)}
             webView.loadFileURL(assets.appendingPathComponent("index.html"),allowingReadAccessTo:assets)
-            if testing{DispatchQueue.main.asyncAfter(deadline:.now()+30){self.finishTest(false,"UI test timed out")}}
+            if testing{DispatchQueue.main.asyncAfter(deadline:.now()+60){self.finishTest(false,"UI test timed out")}}
         }catch {
             if testing{finishTest(false,"Native launch failed: \(error)");return}
             let alert=NSAlert();alert.messageText="Не удалось открыть Семестр";alert.informativeText=(error as? LocalError)?.message ?? error.localizedDescription;alert.alertStyle = .critical;alert.runModal();NSApp.terminate(nil)
@@ -227,17 +227,91 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         const afterTransfer=await request('/records');
         if(beforeTransfer.items.length!==afterTransfer.items.length||beforeTransfer.items.some(r=>!afterTransfer.items.some(after=>after.id===r.id&&after.version===r.version)))throw new Error('Settings import changed study data');
         if((await request('/appearance')).theme!=='dark')throw new Error('Imported theme not persisted');
-        [...document.querySelectorAll('.theme-options button')].find(b=>b.textContent.includes('Светлая')).click();
-        await until(()=>document.documentElement.dataset.theme==='light','Restoring test theme failed');
-        [...document.querySelectorAll('nav button')].find(b=>b.textContent.includes('Долги')).click();
-        await until(()=>document.querySelector('h1').textContent.includes('Закрыть'),'Debt navigation failed');
-        await openDebt();
-        await fill(document.querySelector('#debt-subject-title'),'Основы финансовой грамотности');
+        const themeLabel=testTheme==='light'?'Светлая':'Тёмная';
+        [...document.querySelectorAll('.theme-options button')].find(b=>b.textContent.includes(themeLabel)).click();
+        await until(()=>document.documentElement.dataset.theme===testTheme,'Test theme failed');
+        [...document.querySelectorAll('nav button')].find(b=>b.textContent.includes('Предметы')).click();
+        await until(()=>document.querySelector('.full-row'),'Subject list missing');
+        [...document.querySelectorAll('.full-row')].find(row=>row.textContent.includes('Математический анализ')).click();
+        await until(()=>document.querySelector('.dossier h2')?.textContent==='Математический анализ','Context selection failed');
+        const requirements=()=>document.querySelector('.requirements-card');
+        if(!requirements()?.classList.contains('is-empty')||getComputedStyle(requirements()).backgroundImage!=='none')throw new Error('Empty requirements are not readable');
+        requirements().click();
+        await until(()=>document.querySelector('dialog textarea'),'Requirements editor missing');
+        const conditions=`Сдать две практические работы.\nЗащитить проект на консультации.\nФормат: короткая презентация и ответы на вопросы.`;
+        const requirementsArea=[...document.querySelectorAll('dialog label')].find(l=>l.textContent.includes('Условия сдачи')).querySelector('textarea');
+        await fill(requirementsArea,conditions);
+        document.querySelector('dialog .dialog-footer button').click();
+        await until(()=>!document.querySelector('dialog')&&requirements()?.textContent.includes('две практические'),'Requirements save failed');
+        if(requirements().querySelector('.requirements-text').textContent!==conditions||getComputedStyle(requirements().querySelector('.requirements-text')).whiteSpace!=='pre-wrap')throw new Error('Requirements line breaks lost');
+        const openLesson=async()=>{
+            document.querySelector('.schedule-detail [aria-label="Добавить занятие"]').click();
+            await until(()=>document.querySelectorAll('dialog .time-field').length===2,'Time fields missing');
+        };
+        await openLesson();
+        const startTime=document.querySelector('dialog .time-field input');
+        const endTime=document.querySelectorAll('dialog .time-field input')[1];
+        const clickTime=async element=>{element.focus();element.click();await wait(30)};
+        const selectedPart=()=>document.querySelector('.time-segments button[aria-pressed=true]').textContent;
+        await clickTime(startTime);
+        if(startTime.selectionStart!==0||startTime.selectionEnd!==2||selectedPart()!=='Часы')throw new Error('First time click did not select hours');
+        await clickTime(startTime);
+        if(startTime.selectionStart!==3||startTime.selectionEnd!==5||selectedPart()!=='Минуты')throw new Error('Repeated time click did not select minutes');
+        await clickTime(startTime);
+        if(startTime.selectionStart!==0||selectedPart()!=='Часы')throw new Error('Third click did not select hours');
+        const key=async(element,key,extra={})=>{element.dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true,...extra}));await wait(30)};
+        for(const digit of '1750')await key(startTime,digit);
+        if(startTime.value!=='17:50'||selectedPart()!=='Минуты')throw new Error('Four-digit time entry failed: '+startTime.value);
+        await key(startTime,'ArrowUp');
+        if(startTime.value!=='17:51')throw new Error('Minute adjustment failed');
+        await key(startTime,'ArrowDown');
+        await key(startTime,'ArrowLeft');
+        await key(startTime,'Tab');
+        if(startTime.selectionStart!==3)throw new Error('Keyboard segment navigation failed');
+        await key(startTime,'Tab',{shiftKey:true});
+        if(startTime.selectionStart!==0)throw new Error('Reverse keyboard segment navigation failed');
+        const paste=async(element,value)=>{
+            const clipboardData=new DataTransfer();clipboardData.setData('text/plain',value);
+            element.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData}));await wait(30);
+        };
+        await paste(endTime,'24:70');
+        if(endTime.checkValidity()||endTime.value!=='10:30')throw new Error('Invalid pasted time was accepted');
+        await paste(endTime,'19:20');
+        if(!endTime.checkValidity()||endTime.value!=='19:20')throw new Error('Valid pasted time was rejected');
+        const today=new Intl.DateTimeFormat('en-CA',{timeZone:s.account.profile.timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+        const weekday=new Date(today+'T12:00:00').getDay()||7;
+        const weekdayField=[...document.querySelectorAll('dialog label')].find(l=>l.textContent.includes('День недели')).querySelector('select');
+        weekdayField.value=String(weekday);weekdayField.dispatchEvent(new Event('change',{bubbles:true}));
+        await wait(50);
+        document.querySelector('dialog .dialog-footer button').click();
+        await until(()=>!document.querySelector('dialog'),'Lesson save failed');
+        page=await request('/records');
+        const lesson=page.items.find(r=>r.data.kind==='lesson');
+        if(!lesson||lesson.data.startTime!=='17:50'||lesson.data.endTime!=='19:20')throw new Error('Edited lesson times not persisted');
+        // Fixtures are private to this test's temporary database.
+        const day=new Date(today+'T12:00:00');day.setDate(day.getDate()-7);
+        const from=[day.getFullYear(),String(day.getMonth()+1).padStart(2,'0'),String(day.getDate()).padStart(2,'0')].join('-');
+        for(const [type,startTime,endTime,lessonDay,room] of [['lecture','09:00','10:30',1,'Аудитория 204'],['practice','11:00','12:30',2,'Разбор задач'],['lab','10:00','11:30',4,'Лаборатория 3'],['lecture','11:45','13:15',2,'Пересечение']]){
+            await request('/records','POST',{data:{...lesson.data,type,startTime,endTime,weekday:lessonDay,validFrom:from,room}});
+        }
+        document.dispatchEvent(new Event('visibilitychange'));
+        [...document.querySelectorAll('nav button')].find(b=>b.textContent.includes('Неделя')).click();
+        await until(()=>document.querySelector('.timeline-event.lesson-lecture')&&document.querySelector('.timeline-event.lesson-practice')&&document.querySelector('.timeline-event.lesson-lab'),'Calendar lesson type markers missing');
+        const practice=document.querySelector('.timeline-event.lesson-practice');
+        const lecture=document.querySelector('.timeline-event.lesson-lecture');
+        if(!practice.querySelector('.lesson-badge')?.title.includes('Практика')||!lecture.querySelector('.lesson-badge')?.title.includes('Лекция'))throw new Error('Calendar lesson labels missing');
+        if(getComputedStyle(practice).backgroundColor===getComputedStyle(lecture).backgroundColor||parseFloat(getComputedStyle(practice).borderLeftWidth)<=parseFloat(getComputedStyle(lecture).borderLeftWidth))throw new Error('Practice is not visually emphasized');
+        if(!document.querySelector('.timeline-event.overlap .lesson-badge')||!document.querySelector('.day-lesson-marks .lesson-practice'))throw new Error('Conflict or date-strip type marker missing');
         const toast=document.querySelector('.toast .icon-button');if(toast)toast.click();
+        if(testView==='time'){
+            await openLesson();
+            const field=document.querySelector('dialog .time-field input');
+            await clickTime(field);await clickTime(field);
+        }
         await wait(350);
-        return {title:document.querySelector('dialog h2').textContent,subjectSaved:true,noteSaved:true,profileSaved:true,themes:true,settingsFileRoundtrip:true,previewCancellation:true,studyDataPreserved:true,titleOnlyDebt:true,debtDraftRestored:true,existingSubjectReused:true,networkResources:performance.getEntriesByType('resource').filter(r=>/^https?:/.test(r.name)).length};
+        return {subjectSaved:true,noteSaved:true,profileSaved:true,themes:true,settingsFileRoundtrip:true,previewCancellation:true,studyDataPreserved:true,titleOnlyDebt:true,debtDraftRestored:true,existingSubjectReused:true,requirements:true,timeClickToggle:true,timeKeyboard:true,timePasteValidation:true,lessonTimesPersisted:true,calendarTypes:true,practiceEmphasis:true,theme:testTheme,networkResources:performance.getEntriesByType('resource').filter(r=>/^https?:/.test(r.name)).length};
         """
-        webView.callAsyncJavaScript(script,arguments:[:],in:nil,in:.page){result in
+        webView.callAsyncJavaScript(script,arguments:["testTheme":ProcessInfo.processInfo.environment["SEMESTR_TEST_THEME"] ?? "dark","testView":ProcessInfo.processInfo.environment["SEMESTR_TEST_VIEW"] ?? "calendar"],in:nil,in:.page){result in
             switch result {
             case .failure(let error):self.finishTest(false,"UI: \(error)")
             case .success(let value):
@@ -248,7 +322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                         try? FileManager.default.createDirectory(atPath:directory,withIntermediateDirectories:true)
                         if let image=image,let tiff=image.tiffRepresentation,let bitmap=NSBitmapImageRep(data:tiff),let png=bitmap.representation(using:.png,properties:[:]){try? png.write(to:URL(fileURLWithPath:directory).appendingPathComponent("native-app.png"))}
                     }
-                    self.finishTest(error==nil,"Native UI: title-only debt, draft, existing subject, profile and settings transfer passed; zero HTTP resources. \(values)")
+                    self.finishTest(error==nil,"Native UI: study data, settings transfer, readable requirements, time input and calendar types passed; zero HTTP resources. \(values)")
                 }
             }
         }
