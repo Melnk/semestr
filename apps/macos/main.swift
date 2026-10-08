@@ -8,20 +8,44 @@ import UniformTypeIdentifiers
     var notifications:NotificationService?
     var updates:UpdateService?
     private let testTransferDirectory:URL?
+    private var transferPanel:NSSavePanel?
+    private var lastTransferDirectory:URL?
+    private var transferFiles=[String:URL]()
+    private var transferFileOrder=[String]()
     init(store:LocalStore,assets:URL,testTransferDirectory:URL?=nil){self.store=store;self.assets=assets;self.testTransferDirectory=testTransferDirectory}
-    private func chooseTransferFile(settings:Bool,saving:Bool,completion:@escaping(URL?)->Void){
+    private func fileDetails(_ url:URL,size:Int) -> Object {
+        let token=newID();transferFiles[token]=url;transferFileOrder.append(token)
+        if transferFileOrder.count>50{transferFiles.removeValue(forKey:transferFileOrder.removeFirst())}
+        let folder=url.deletingLastPathComponent().path
+        let home=FileManager.default.homeDirectoryForCurrentUser.path
+        return ["token":token,"name":url.lastPathComponent,"folder":folder.hasPrefix(home+"/") ? "~"+folder.dropFirst(home.count):folder,"size":size]
+    }
+    private func chooseTransferFile(settings:Bool,saving:Bool,window:NSWindow?,completion:@escaping(URL?)->Void){
         // UI tests use actual files in their own temporary directory, bypassing only the picker.
         if let directory=testTransferDirectory {completion(directory.appendingPathComponent(settings ? "settings.json":"study-data.json"));return}
+        let panel:NSSavePanel
         if saving {
-            let panel=NSSavePanel();panel.allowedContentTypes=[.json]
+            panel=NSSavePanel();panel.canCreateDirectories=true
             panel.nameFieldStringValue="Семестр\(settings ? " — настройки":"") — \(CalendarRules.dateString(Date())).json"
             panel.title=settings ? "Сохранить настройки Семестра":"Сохранить данные Семестра"
-            panel.begin{completion($0 == .OK ? panel.url:nil)}
+            panel.prompt="Сохранить файл"
+            panel.message="Выберите папку для файла. После сохранения его можно показать в Finder."
         }else{
-            let panel=NSOpenPanel();panel.allowedContentTypes=[.json];panel.allowsMultipleSelection=false;panel.canChooseDirectories=false
-            panel.title=settings ? "Загрузить настройки Семестра":"Импортировать данные Семестра"
-            panel.begin{completion($0 == .OK ? panel.url:nil)}
+            let open=NSOpenPanel();open.allowsMultipleSelection=false;open.canChooseDirectories=false;open.canChooseFiles=true;open.resolvesAliases=true
+            open.title=settings ? "Выбрать файл настроек":"Выбрать файл учебных данных"
+            open.prompt="Выбрать файл"
+            open.message="Выберите JSON-файл, сохранённый в «Семестре». Перед импортом покажем его содержимое."
+            panel=open
         }
+        panel.allowedContentTypes=[.json];panel.allowsOtherFileTypes=false;panel.isExtensionHidden=false
+        panel.directoryURL=lastTransferDirectory ?? FileManager.default.urls(for:.downloadsDirectory,in:.userDomainMask).first
+        transferPanel=panel
+        let finished:(NSApplication.ModalResponse)->Void={ [self] response in
+            let url=response == .OK ? panel.url:nil
+            if let url=url{lastTransferDirectory=url.deletingLastPathComponent()}
+            transferPanel=nil;completion(url)
+        }
+        if let window=window{window.makeKeyAndOrderFront(nil);panel.beginSheetModal(for:window,completionHandler:finished)}else{panel.begin(completionHandler:finished)}
     }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage, replyHandler: @escaping (Any?, String?) -> Void) {
         guard message.frameInfo.isMainFrame, let source=message.frameInfo.request.url,source.isFileURL,source.standardizedFileURL.path.hasPrefix(assets.standardizedFileURL.path+"/"),let request=message.body as? Object else {replyHandler(nil,"Недопустимый источник запроса");return}
@@ -57,15 +81,23 @@ import UniformTypeIdentifiers
                 let value=text(request,"text");try check(value.utf8.count<=2_000_000,"Текст слишком большой")
                 NSPasteboard.general.clearContents();NSPasteboard.general.setString(value,forType:.string);success()
             case "export", "exportSettings":
+                try check(transferPanel==nil,"Сначала завершите выбор файла в открытом окне.")
                 let settings=text(request,"action")=="exportSettings"
                 let data=try JSONSerialization.data(withJSONObject:store.request(path:settings ? "/settings/export":"/export"),options:[.prettyPrinted,.sortedKeys,.withoutEscapingSlashes])
-                chooseTransferFile(settings:settings,saving:true) { url in
+                chooseTransferFile(settings:settings,saving:true,window:message.webView?.window) { [self] url in
                     guard let url=url else{success(["saved":false]);return}
-                    do{try data.write(to:url,options:.atomic);success(["saved":true])}catch{failure(error)}
+                    do{try data.write(to:url,options:.atomic);success(["saved":true,"file":fileDetails(url,size:data.count)])}
+                    catch{failure(LocalError(status:500,code:"file_write",message:"Не удалось сохранить файл. Выберите доступную папку и проверьте свободное место."))}
                 }
+            case "revealTransferFile":
+                guard let url=transferFiles[text(request,"token")] else{try fail("Этот файл больше недоступен. Сохраните его заново.")}
+                try check(FileManager.default.fileExists(atPath:url.path),"Файл перемещён или удалён. Сохраните его заново.")
+                if testTransferDirectory==nil{NSWorkspace.shared.activateFileViewerSelecting([url])}
+                success(["revealed":true,"name":url.lastPathComponent])
             case "import", "importSettings":
+                try check(transferPanel==nil,"Сначала завершите выбор файла в открытом окне.")
                 let settings=text(request,"action")=="importSettings"
-                chooseTransferFile(settings:settings,saving:false) { url in
+                chooseTransferFile(settings:settings,saving:false,window:message.webView?.window) { [self] url in
                     guard let url=url else{success(null);return}
                     do{
                         let limit=settings ? 64_000:5_000_000
@@ -73,9 +105,11 @@ import UniformTypeIdentifiers
                         try check(size<=limit,settings ? "Файл настроек должен быть меньше 64 КБ":"Файл должен быть меньше 5 МБ")
                         let data=try Data(contentsOf:url)
                         try check(data.count<=limit,"Файл слишком большой")
-                        guard let b=try JSONSerialization.jsonObject(with:data) as? Object else{try fail("Неверный JSON-файл")}
+                        guard let b=(try? JSONSerialization.jsonObject(with:data)) as? Object else{try fail("Не удалось прочитать JSON. Выберите файл, сохранённый в «Семестре».")}
+                        if settings && b["records"] != nil{try fail("Это файл учебных данных. Выберите его в разделе «Ваши данные — с вами».")}
+                        if !settings && text(b,"format")=="semestr-settings"{try fail("Это файл настроек. Выберите его в разделе «Перенос настроек».")}
                         if settings{try Rules.settingsBundle(b)}else{_=try Rules.bundle(b)}
-                        success(b)
+                        success(["bundle":b,"file":fileDetails(url,size:data.count)])
                     }catch{failure(error)}
                 }
             case "dataFolder": NSWorkspace.shared.open(store.fileURL.deletingLastPathComponent());success()
@@ -273,20 +307,23 @@ import UniformTypeIdentifiers
         await until(()=>document.documentElement.dataset.theme==='dark','Dark theme failed');
         const transferButton=label=>[...document.querySelectorAll('.settings-transfer button')].find(b=>b.textContent.includes(label));
         transferButton('Сохранить настройки').click();
-        await until(()=>document.querySelector('.toast')?.textContent.includes('Файл настроек сохранён'),'Settings file export failed');
+        await until(()=>document.querySelector('.saved-file-notice')?.textContent.includes('Файл настроек сохранён'),'Settings file export failed');
+        if(!document.querySelector('.saved-file-notice').textContent.includes('settings.json')||!document.querySelector('.reveal-file'))throw new Error('Saved settings receipt missing');
+        document.querySelector('.reveal-file').click();await wait(100);
+        if(document.querySelector('.saved-file-notice .error'))throw new Error('Finder action failed');
         await fill(document.querySelector('.settings form input'),'Получатель');
         document.querySelector('.settings form button.primary').click();
         await until(()=>document.querySelector('.toast')?.textContent.includes('Профиль сохранён'),'Destination profile save failed');
         [...document.querySelectorAll('.theme-options button')].find(b=>b.textContent.includes('Светлая')).click();
         await until(()=>document.documentElement.dataset.theme==='light','Light theme failed');
         const beforeTransfer=await request('/records');
-        transferButton('Загрузить настройки').click();
+        document.querySelector('.choose-settings-file').click();
         await until(()=>document.querySelector('.settings-preview'),'Settings file preview failed');
         if(!document.querySelector('.settings-preview').textContent.includes('Студент')||!document.querySelector('.settings-preview').textContent.includes('Тёмная'))throw new Error('Incomplete settings preview');
         document.querySelector('.settings-preview .text-button').click();
         await until(()=>!document.querySelector('.settings-preview'),'Cancel preview failed');
         if((await request('/auth/session')).account.profile.name!=='Получатель'||(await request('/appearance')).theme!=='light')throw new Error('Cancel changed settings');
-        transferButton('Загрузить настройки').click();
+        document.querySelector('.choose-settings-file').click();
         await until(()=>document.querySelector('.settings-preview'),'Settings reload failed');
         document.querySelector('.settings-preview button.primary').click();
         await until(()=>!document.querySelector('.settings-preview')&&document.querySelector('.settings form input').value==='Студент'&&document.documentElement.dataset.theme==='dark','Settings import did not update profile and appearance');
@@ -368,8 +405,8 @@ import UniformTypeIdentifiers
         if(!practice.querySelector('.lesson-badge')?.title.includes('Практика')||!lecture.querySelector('.lesson-badge')?.title.includes('Лекция'))throw new Error('Calendar lesson labels missing');
         if(getComputedStyle(practice).backgroundColor===getComputedStyle(lecture).backgroundColor||parseFloat(getComputedStyle(practice).borderLeftWidth)<=parseFloat(getComputedStyle(lecture).borderLeftWidth))throw new Error('Practice is not visually emphasized');
         if(!document.querySelector('.timeline-event.overlap .lesson-badge')||!document.querySelector('.day-lesson-marks .lesson-practice'))throw new Error('Conflict or date-strip type marker missing');
-        const native=async(action)=>{
-            const reply=await window.webkit.messageHandlers.semestr.postMessage({action});
+        const native=async(action,parameters={})=>{
+            const reply=await window.webkit.messageHandlers.semestr.postMessage({action,...parameters});
             if(!reply.ok)throw new Error(reply.message);return reply.data;
         };
         await request('/records','POST',{data:{kind:'subject',title:'Язык',assessment:'credit'}});
@@ -427,13 +464,48 @@ import UniformTypeIdentifiers
         window.semestrTestStage='updates menu';
         window.dispatchEvent(new Event('semestr:check-updates'));await wait(100);
         await until(()=>!document.querySelector('.update-check').disabled,'Native update menu failed');
-        if(testView==='updates'){
-            document.querySelector('.update-settings').scrollIntoView({block:'start'});
+        window.semestrTestStage='file transfers';
+        const exportButton=document.querySelector('.export-data');
+        exportButton.click();
+        await until(()=>document.querySelector('.saved-file-notice')?.textContent.includes('study-data.json'),'Study export receipt missing');
+        if(!document.querySelector('.saved-file-notice').textContent.includes('Показать в Finder'))throw new Error('Finder button missing');
+        const savedFile=await native('export');
+        if(!savedFile.saved||savedFile.file.name!=='study-data.json'||savedFile.file.size<=0)throw new Error('Export file metadata missing');
+        if(!(await native('revealTransferFile',{token:savedFile.file.token})).revealed)throw new Error('Known file not revealable');
+        let unknownRejected=false;try{await native('revealTransferFile',{token:'/etc/passwd'})}catch{unknownRejected=true}
+        if(!unknownRejected)throw new Error('Arbitrary Finder path accepted');
+        const importedFile=await native('import');
+        if(importedFile.file.name!=='study-data.json'||importedFile.bundle.records.length!==(await request('/records')).items.length)throw new Error('Exported study file did not roundtrip');
+        const originalData=await studySnapshot();
+        document.querySelector('.choose-data-file').click();
+        await until(()=>document.querySelector('.data-preview'),'Study file preview missing');
+        if(!document.querySelector('.data-preview').textContent.includes('study-data.json'))throw new Error('Selected filename missing');
+        const mode=document.querySelector('.data-preview select');mode.value='replace';mode.dispatchEvent(new Event('change',{bubbles:true}));await wait(100);
+        if(!document.querySelector('.data-preview button.primary').disabled)throw new Error('Replace does not require confirmation');
+        document.querySelector('.data-preview .text-button').click();
+        await until(()=>!document.querySelector('.data-preview'),'Import cancellation failed');
+        if(originalData!==await studySnapshot())throw new Error('Preview or cancellation modified records');
+        document.querySelector('.choose-data-file').click();
+        await until(()=>document.querySelector('.data-preview'),'File reselection failed');
+        if(document.querySelector('.data-preview select').value!=='add')throw new Error('Reselection must default to adding');
+        document.querySelector('.data-preview button.primary').click();
+        await until(()=>!document.querySelector('.data-preview')&&document.querySelector('.toast')?.textContent.includes('Данные импортированы'),'Study file import failed');
+        if((await request('/records')).items.length!==importedFile.bundle.records.length*2)throw new Error('Study records not imported');
+        window.dispatchEvent(new Event('semestr:export'));
+        await until(()=>document.querySelector('.saved-file-notice')?.textContent.includes('study-data.json'),'Native export menu receipt missing');
+        const scrollSection=selector=>{const area=document.querySelector('.workspace');const section=document.querySelector(selector);area.scrollTop+=section.getBoundingClientRect().top-area.getBoundingClientRect().top-80};
+        if(testView==='transfer'){
+            document.querySelector('.choose-data-file').click();
+            await until(()=>document.querySelector('.data-preview'),'Transfer screenshot preview missing');
+            if(document.querySelector('.data-transfer input[type=file]'))throw new Error('Duplicate browser file picker in native app');
+            scrollSection('.data-transfer');
+        }else if(testView==='updates'){
+            scrollSection('.update-settings');
         }else if(testView!=='notifications'){
             [...document.querySelectorAll('nav button')].find(b=>b.textContent.includes('Неделя')).click();
             await until(()=>document.querySelector('.time-grid'),'Calendar not restored');
         }else{
-            document.querySelector('.notification-settings').scrollIntoView({block:'start'});
+            scrollSection('.notification-settings');
         }
         const toast=document.querySelector('.toast .icon-button');if(toast)toast.click();
         window.semestrTestStage='snapshot';
@@ -443,7 +515,7 @@ import UniformTypeIdentifiers
             await clickTime(field);await clickTime(field);
         }
         await wait(350);
-        return {subjectSaved:true,noteSaved:true,profileSaved:true,themes:true,settingsFileRoundtrip:true,previewCancellation:true,studyDataPreserved:true,titleOnlyDebt:true,debtDraftRestored:true,existingSubjectReused:true,requirements:true,timeClickToggle:true,timeKeyboard:true,timePasteValidation:true,lessonTimesPersisted:true,calendarTypes:true,practiceEmphasis:true,examsFirst:true,notifications:true,notificationDisable:true,notificationSettingsTransfer:true,theme:testTheme,updates:true,updatePreference:true,updateDownload:true,networkResources:performance.getEntriesByType('resource').filter(r=>/^https?:/.test(r.name)).length};
+        return {subjectSaved:true,noteSaved:true,profileSaved:true,themes:true,settingsFileRoundtrip:true,previewCancellation:true,studyDataPreserved:true,titleOnlyDebt:true,debtDraftRestored:true,existingSubjectReused:true,requirements:true,timeClickToggle:true,timeKeyboard:true,timePasteValidation:true,lessonTimesPersisted:true,calendarTypes:true,practiceEmphasis:true,examsFirst:true,notifications:true,notificationDisable:true,notificationSettingsTransfer:true,theme:testTheme,updates:true,updatePreference:true,updateDownload:true,exportReceipt:true,finderReveal:true,studyFileRoundtrip:true,importPreview:true,importCancellation:true,networkResources:performance.getEntriesByType('resource').filter(r=>/^https?:/.test(r.name)).length};
         """
         webView.callAsyncJavaScript(script,arguments:["testTheme":ProcessInfo.processInfo.environment["SEMESTR_TEST_THEME"] ?? "dark","testView":ProcessInfo.processInfo.environment["SEMESTR_TEST_VIEW"] ?? "calendar"],in:nil,in:.page){result in
             switch result {
@@ -456,7 +528,7 @@ import UniformTypeIdentifiers
                         try? FileManager.default.createDirectory(atPath:directory,withIntermediateDirectories:true)
                         if let image=image,let tiff=image.tiffRepresentation,let bitmap=NSBitmapImageRep(data:tiff),let png=bitmap.representation(using:.png,properties:[:]){try? png.write(to:URL(fileURLWithPath:directory).appendingPathComponent("native-app.png"))}
                     }
-                    self.finishTest(error==nil,"Native UI: study data, settings transfer, readable requirements, time input, calendar types, exam order, notifications and updates passed; zero HTTP resources. \(values)")
+                    self.finishTest(error==nil,"Native UI: study data, settings transfer, readable requirements, time input, calendar types, exam order, notifications, updates and file transfers passed; zero HTTP resources. \(values)")
                 }
             }
         }

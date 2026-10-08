@@ -10,6 +10,7 @@ import Week from './Week';
 import LessonBadge from './LessonBadge';
 import RequirementsCard from './RequirementsCard';
 import {useAppUpdates,UpdateBanner} from './AppUpdates';
+import {SavedFileNotice,saveNativeFile,type ExportedFile} from './TransferFiles';
 import {readPreference,writePreference,clearDrafts} from './storage';
 
 type View='today'|'week'|'subjects'|'debts'|'archive'|'settings';
@@ -20,11 +21,13 @@ export default function App(){
  useEffect(()=>{document.documentElement.dataset.theme=theme;writePreference('semestr:theme',theme)},[theme]);
  const notify=useCallback((s:string)=>setNotice(s),[]);
  const updates=useAppUpdates(isLocalApp&&!demo);
+ const[savedFile,setSavedFile]=useState<ExportedFile|null>(null);
+ useEffect(()=>{const saved=(event:Event)=>{setSavedFile((event as CustomEvent<ExportedFile>).detail);setNotice('')};window.addEventListener('semestr:file-exported',saved);return()=>window.removeEventListener('semestr:file-exported',saved)},[]);
  const showUpdates=useCallback(()=>{setView('settings');setDetailOpen(false);setMenu(false);setTimeout(()=>document.querySelector('.update-settings')?.scrollIntoView({block:'start',behavior:'smooth'}),80)},[]);
  useEffect(()=>{if(!isLocalApp||demo)return;const check=()=>{showUpdates();void updates.check()};window.addEventListener('semestr:check-updates',check);return()=>window.removeEventListener('semestr:check-updates',check)},[demo,showUpdates,updates.check]);
  const appearanceReady=useRef(false);
  async function changeTheme(value:string){try{if(isLocalApp&&!demo)await api.request('/appearance','PUT',{theme:value});setTheme(value)}catch(e){notify((e as Error).message)}}
- useEffect(()=>{if(!isLocalApp)return;const add=()=>setEditor({kind:'subject'});const exportData=()=>{void nativeAction<{saved:boolean}>('export').then(r=>{if(r.saved)notify('Экспорт сохранён')}).catch(e=>notify(e.message))};window.addEventListener('semestr:new-subject',add);window.addEventListener('semestr:export',exportData);return()=>{window.removeEventListener('semestr:new-subject',add);window.removeEventListener('semestr:export',exportData)}},[notify]);
+ useEffect(()=>{if(!isLocalApp)return;const add=()=>setEditor({kind:'subject'});const exportData=()=>{void saveNativeFile().catch(e=>notify(e.message))};window.addEventListener('semestr:new-subject',add);window.addEventListener('semestr:export',exportData);return()=>{window.removeEventListener('semestr:new-subject',add);window.removeEventListener('semestr:export',exportData)}},[notify]);
  useEffect(()=>{if(!notice)return;const t=setTimeout(()=>setNotice(''),6000);return()=>clearTimeout(t)},[notice]);
  const refresh=useCallback(async()=>{if(demo)return;try{const s=await api.session();if(isLocalApp&&!appearanceReady.current){const theme=readPreference('semestr:theme','light');const appearance=await api.request<Appearance>('/appearance/initialize','POST',{theme:theme==='dark'?'dark':'light'});appearanceReady.current=true;setTheme(appearance.theme)}const rs=await api.records();setAccount(s.account);setRecords(rs);setSelected(prev=>prev&&rs.some(r=>r.id===prev)?prev:rs.find(r=>r.data.kind==='subject')?.id||null);setConnection('')}catch(e){if(e instanceof ApiError&&e.status===401){setAccount(null);setRecords([])}else setConnection((e as Error).message)}finally{setInitial(false);setLoading(false)}},[demo]);
  useEffect(()=>{if(demo)return;void refresh();const poll=setInterval(()=>{if(document.visibilityState==='visible')void refresh()},20000);const visibility=()=>{if(document.visibilityState==='visible')void refresh()};window.addEventListener('online',visibility);document.addEventListener('visibilitychange',visibility);return()=>{clearInterval(poll);window.removeEventListener('online',visibility);document.removeEventListener('visibilitychange',visibility)}},[refresh]);
@@ -73,7 +76,7 @@ export default function App(){
  {editor&&<Editor {...editor} account={account} records={records} subjectId={selected||''} onClose={()=>setEditor(null)} onSaved={(message,debtSubjectId)=>{notify(message||(isLocalApp?'Сохранено на этом Mac':'Сохранено на сервере'));if(debtSubjectId){setSelected(debtSubjectId);setTab('context');setView('debts')}void refresh()}}/>}
  {confirmDelete&&<Dialog title="Удалить запись?" onClose={()=>setConfirmDelete(null)}><p>Это действие нельзя отменить. Сначала удалите связанные задания, долги, занятия и заметки — приложение защищает их от случайного удаления.</p><div className="dialog-footer"><button className="outline" onClick={()=>setConfirmDelete(null)}>Отмена</button><button className="danger-button" onClick={()=>void remove()}>Удалить</button></div></Dialog>}
  {move&&<MoveDialog occurrence={move} exception={exceptions.find(e=>e.lessonId===move.lessonId&&e.originalDate===move.originalDate)} demo={demo} onClose={()=>setMove(null)} onSaved={()=>{notify('Изменено только это занятие');void loadSchedule()}}/>}
- {notice&&<div className="toast" role="status"><CheckCircle2 size={18}/>{notice}<button className="icon-button" aria-label="Скрыть сообщение" onClick={()=>setNotice('')}><X size={16}/></button></div>}
+ <div className="feedback-stack">{notice&&<div className="toast" role="status"><CheckCircle2 size={18}/>{notice}<button className="icon-button" aria-label="Скрыть сообщение" onClick={()=>setNotice('')}><X size={16}/></button></div>}{savedFile&&<SavedFileNotice key={savedFile.file.token} exported={savedFile} onClose={()=>setSavedFile(null)}/>}</div>
  </div>
 }
 
