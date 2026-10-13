@@ -19,3 +19,8 @@ export const activeTask=(r:StudyRecord<Task>)=>r.data.status!=='accepted';
 export function sortSubjects(subjects:StudyRecord<Subject>[]):StudyRecord<Subject>[] {
  return [...subjects].sort((a,b)=>Number(b.data.assessment==='exam')-Number(a.data.assessment==='exam')||a.data.title.localeCompare(b.data.title,'ru',{sensitivity:'base'})||a.id.localeCompare(b.id));
 }
+
+export function sortTasks(tasks:StudyRecord<Task>[]):StudyRecord<Task>[] {
+ const deadline=(task:StudyRecord<Task>)=>task.data.deadline?new Date(task.data.deadline).getTime():Infinity;
+ return [...tasks].sort((a,b)=>(deadline(a)-deadline(b))||a.data.title.localeCompare(b.data.title,'ru',{sensitivity:'base'})||a.id.localeCompare(b.id));
+}

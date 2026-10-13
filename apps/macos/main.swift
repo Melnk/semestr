@@ -138,7 +138,10 @@ import UniformTypeIdentifiers
             else{directory=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("Semestr")}
             bridge=DesktopBridge(store:try LocalStore(directory:directory),assets:assets,testTransferDirectory:testing ? directory:nil)
             let updateDownloads=testing ? directory.appendingPathComponent("updates"):FileManager.default.urls(for:.cachesDirectory,in:.userDomainMask)[0].appendingPathComponent("Semestr/Updates")
-            let updates=UpdateService(directory:directory,downloads:updateDownloads,currentVersion:Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "0.0.0",transport:testing ? TestUpdateTransport():GitHubUpdateTransport(),openInstaller:{ [weak self] url in self?.testing==true ? true:NSWorkspace.shared.open(url) })
+            let updateTransport:UpdateTransport
+            if testing {let driver=TestUpdateTransport();driver.version="99.0.0";updateTransport=driver}
+            else {updateTransport=GitHubUpdateTransport()}
+            let updates=UpdateService(directory:directory,downloads:updateDownloads,currentVersion:Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "0.0.0",transport:updateTransport,openInstaller:{ [weak self] url in self?.testing==true ? true:NSWorkspace.shared.open(url) })
             updateService=updates;bridge.updates=updates
             updates.onChange={ [weak self] in self?.webView?.evaluateJavaScript("window.dispatchEvent(new Event('semestr:update-status'))",completionHandler:nil) }
             let delivery:ReminderDelivery
@@ -440,7 +443,7 @@ import UniformTypeIdentifiers
         window.semestrTestStage='updates loaded';
         await until(()=>document.querySelector('.update-settings .update-check'),'Update settings missing');
         if(!document.querySelector('#update-automatic').checked)throw new Error('Daily update check default missing');
-        if((await native('updateStatus')).availableVersion!=='0.6.0')throw new Error('Available update not exposed');
+        if((await native('updateStatus')).availableVersion!=='99.0.0')throw new Error('Available update not exposed');
         window.semestrTestStage='updates automatic';
         document.querySelector('#update-automatic').click();
         await until(()=>!document.querySelector('#update-automatic').checked&&!document.querySelector('.update-check').disabled,'Update preference did not save');
@@ -493,8 +496,74 @@ import UniformTypeIdentifiers
         if((await request('/records')).items.length!==importedFile.bundle.records.length*2)throw new Error('Study records not imported');
         window.dispatchEvent(new Event('semestr:export'));
         await until(()=>document.querySelector('.saved-file-notice')?.textContent.includes('study-data.json'),'Native export menu receipt missing');
+        window.semestrTestStage='assignments';
+        const allRecords=(await request('/records')).items;
+        const differenceSubjectID=allRecords.find(r=>r.data.kind==='debt'&&r.data.reason==='difference').data.subjectId;
+        const differenceTitle=allRecords.find(r=>r.id===differenceSubjectID).data.title;
+        const dueIn=hours=>new Date(Date.now()+hours*3600000).toISOString();
+        const homeworkFixtures=[];
+        for(const data of [
+            {title:'Разобрать задачи к семинару',deadline:dueIn(-24),status:'revision'},
+            {title:'Домашняя работа: пределы и непрерывность функций',deadline:dueIn(1),status:'in_progress'},
+            {title:'Конспект первой лекции',deadline:dueIn(-48),status:'accepted'},
+            {title:'Решить задачи по академической разнице',subjectId:differenceSubjectID,deadline:dueIn(48),status:'submitted'},
+            {title:'Прочитать главу учебника',deadline:null,status:'todo'}
+        ])homeworkFixtures.push(await request('/records','POST',{data:{kind:'task',subjectId:record.id,...data}}));
+        const openAssignments=async()=>{
+            [...document.querySelectorAll('nav button')].find(b=>b.textContent.includes('Задания')).click();
+            await until(()=>document.querySelector('.assignments'),'Assignments section missing');
+        };
+        document.querySelector('.toolbar .refresh').click();await openAssignments();
+        const expectedTasks=(await request('/records')).items.filter(r=>r.data.kind==='task');
+        await until(()=>document.querySelectorAll('.assignment-row').length===expectedTasks.length,'Assignments across all subjects missing');
+        const orderedIDs=()=>[...document.querySelectorAll('.assignment-row')].map(row=>row.dataset.taskId);
+        const assertTaskOrder=async()=>{
+            const current=(await request('/records')).items.filter(r=>r.data.kind==='task');
+            const expected=current.sort((a,b)=>((a.data.deadline?Date.parse(a.data.deadline):Infinity)-(b.data.deadline?Date.parse(b.data.deadline):Infinity))||a.data.title.localeCompare(b.data.title,'ru',{sensitivity:'base'})||a.id.localeCompare(b.id)).map(r=>r.id);
+            await until(()=>JSON.stringify(orderedIDs())===JSON.stringify(expected),'Homework deadline order is incorrect');
+        };
+        await assertTaskOrder();
+        if(document.querySelector('.date-strip'))throw new Error('Assignments should include every date');
+        if(!document.querySelector('[data-task-id="'+homeworkFixtures[0].id+'"] .assignment-overdue')||document.querySelector('[data-task-id="'+homeworkFixtures[2].id+'"] .assignment-overdue'))throw new Error('Overdue marker ignores task status');
+        const searchInput=document.querySelector('.toolbar input');
+        await fill(searchInput,differenceTitle);
+        await until(()=>document.querySelectorAll('.assignment-row').length===1,'Homework subject search failed');
+        if(orderedIDs()[0]!==homeworkFixtures[3].id)throw new Error('Academic difference homework excluded');
+        await fill(searchInput,'Несуществующее задание');
+        await until(()=>document.querySelector('.assignments .empty-state'),'Homework search empty state missing');
+        await fill(searchInput,'');
+        const filterTasks=async(label)=>{[...document.querySelectorAll('.assignment-filters button')].find(b=>b.textContent===label).click();await wait(100)};
+        await filterTasks('Принятые');
+        if(orderedIDs().join(',')!==homeworkFixtures[2].id)throw new Error('Accepted homework filter failed');
+        await filterTasks('Открытые');
+        if(orderedIDs().includes(homeworkFixtures[2].id)||!orderedIDs().includes(homeworkFixtures[3].id))throw new Error('Submitted homework treated as accepted');
+        await filterTasks('Все');
+        document.querySelector('.assignment-add').click();
+        await until(()=>document.querySelector('dialog .editor-form'),'Add homework editor missing');
+        await fill(document.querySelector('dialog input[maxlength="300"]'),'Проверить доказательство теоремы');
+        document.querySelector('dialog .dialog-footer .primary').click();
+        await until(()=>!document.querySelector('dialog'),'Homework creation failed');
+        const addedTask=(await request('/records')).items.find(r=>r.data.kind==='task'&&r.data.title==='Проверить доказательство теоремы');
+        if(!addedTask||addedTask.data.deadline!==null)throw new Error('Undated homework not saved');
+        await assertTaskOrder();
+        document.querySelector('[data-task-id="'+addedTask.id+'"]').click();
+        await until(()=>document.querySelector('dialog input[type=datetime-local]'),'Homework edit did not open');
+        const newDeadline=new Date(Date.now()-72*3600000);
+        const localDeadline=new Date(newDeadline.getTime()-newDeadline.getTimezoneOffset()*60000).toISOString().slice(0,16);
+        await fill(document.querySelector('dialog input[type=datetime-local]'),localDeadline);
+        document.querySelector('dialog .dialog-footer .primary').click();
+        await until(()=>!document.querySelector('dialog'),'Homework deadline edit failed');
+        await assertTaskOrder();
+        if(orderedIDs()[0]!==addedTask.id)throw new Error('Edited deadline did not move homework to first place');
+        const shownTime=document.querySelector('[data-task-id="'+homeworkFixtures[1].id+'"] time span').textContent;
+        if(shownTime!==new Intl.DateTimeFormat('ru',{timeZone:(await request('/auth/session')).account.profile.timezone,hour:'2-digit',minute:'2-digit'}).format(new Date(homeworkFixtures[1].data.deadline)))throw new Error('Homework deadline uses wrong timezone');
+        const savedNotice=document.querySelector('.saved-file-heading button');if(savedNotice)savedNotice.click();
+        [...document.querySelectorAll('.sidebar-bottom button')].find(b=>b.textContent.includes('Настройки')).click();
+        await until(()=>document.querySelector('.data-transfer'),'Settings not restored after homework test');
         const scrollSection=selector=>{const area=document.querySelector('.workspace');const section=document.querySelector(selector);area.scrollTop+=section.getBoundingClientRect().top-area.getBoundingClientRect().top-80};
-        if(testView==='transfer'){
+        if(testView==='tasks'){
+            await openAssignments();document.querySelector('.workspace').scrollTop=0;
+        }else if(testView==='transfer'){
             document.querySelector('.choose-data-file').click();
             await until(()=>document.querySelector('.data-preview'),'Transfer screenshot preview missing');
             if(document.querySelector('.data-transfer input[type=file]'))throw new Error('Duplicate browser file picker in native app');
@@ -515,7 +584,7 @@ import UniformTypeIdentifiers
             await clickTime(field);await clickTime(field);
         }
         await wait(350);
-        return {subjectSaved:true,noteSaved:true,profileSaved:true,themes:true,settingsFileRoundtrip:true,previewCancellation:true,studyDataPreserved:true,titleOnlyDebt:true,debtDraftRestored:true,existingSubjectReused:true,requirements:true,timeClickToggle:true,timeKeyboard:true,timePasteValidation:true,lessonTimesPersisted:true,calendarTypes:true,practiceEmphasis:true,examsFirst:true,notifications:true,notificationDisable:true,notificationSettingsTransfer:true,theme:testTheme,updates:true,updatePreference:true,updateDownload:true,exportReceipt:true,finderReveal:true,studyFileRoundtrip:true,importPreview:true,importCancellation:true,networkResources:performance.getEntriesByType('resource').filter(r=>/^https?:/.test(r.name)).length};
+        return {assignments:true,homeworkDeadlineOrder:true,homeworkSearch:true,homeworkFilters:true,homeworkEditing:true,homeworkTimezone:true,subjectSaved:true,noteSaved:true,profileSaved:true,themes:true,settingsFileRoundtrip:true,previewCancellation:true,studyDataPreserved:true,titleOnlyDebt:true,debtDraftRestored:true,existingSubjectReused:true,requirements:true,timeClickToggle:true,timeKeyboard:true,timePasteValidation:true,lessonTimesPersisted:true,calendarTypes:true,practiceEmphasis:true,examsFirst:true,notifications:true,notificationDisable:true,notificationSettingsTransfer:true,theme:testTheme,updates:true,updatePreference:true,updateDownload:true,exportReceipt:true,finderReveal:true,studyFileRoundtrip:true,importPreview:true,importCancellation:true,networkResources:performance.getEntriesByType('resource').filter(r=>/^https?:/.test(r.name)).length};
         """
         webView.callAsyncJavaScript(script,arguments:["testTheme":ProcessInfo.processInfo.environment["SEMESTR_TEST_THEME"] ?? "dark","testView":ProcessInfo.processInfo.environment["SEMESTR_TEST_VIEW"] ?? "calendar"],in:nil,in:.page){result in
             switch result {
@@ -528,7 +597,7 @@ import UniformTypeIdentifiers
                         try? FileManager.default.createDirectory(atPath:directory,withIntermediateDirectories:true)
                         if let image=image,let tiff=image.tiffRepresentation,let bitmap=NSBitmapImageRep(data:tiff),let png=bitmap.representation(using:.png,properties:[:]){try? png.write(to:URL(fileURLWithPath:directory).appendingPathComponent("native-app.png"))}
                     }
-                    self.finishTest(error==nil,"Native UI: study data, settings transfer, readable requirements, time input, calendar types, exam order, notifications, updates and file transfers passed; zero HTTP resources. \(values)")
+                    self.finishTest(error==nil,"Native UI: study data, settings transfer, readable requirements, time input, calendar types, exam order, notifications, updates, file transfers and homework deadlines passed; zero HTTP resources. \(values)")
                 }
             }
         }
