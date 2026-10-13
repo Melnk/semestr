@@ -164,7 +164,8 @@ import UniformTypeIdentifiers
             config.preferences.javaScriptCanOpenWindowsAutomatically=false
             if testing{config.websiteDataStore = .nonPersistent()}
             webView=WKWebView(frame:.zero,configuration:config);webView.navigationDelegate=self;webView.uiDelegate=self
-            window=NSWindow(contentRect:NSRect(x:0,y:0,width:1380,height:880),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
+            let compactTest=testing && ProcessInfo.processInfo.environment["SEMESTR_TEST_COMPACT"]=="1"
+            window=NSWindow(contentRect:NSRect(x:0,y:0,width:compactTest ? 800:1380,height:compactTest ? 600:880),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
             window.title="Семестр";window.minSize=NSSize(width:780,height:600)
             window.contentView=webView;window.center();window.isReleasedWhenClosed=false
             if !testing{window.setFrameAutosaveName("SemestrMainWindow")}
@@ -260,7 +261,7 @@ import UniformTypeIdentifiers
         if((await request('/records')).items.length!==0)throw new Error('Cancel created an empty subject');
         await openDebt();
         if(document.querySelector('#debt-subject-title').value!=='Теория вероятностей')throw new Error('New debt title draft was lost');
-        document.querySelector('dialog .dialog-footer button').click();
+        document.querySelector('dialog .dialog-footer .primary').click();
         await until(()=>!document.querySelector('dialog'),'Title-only debt save failed');
         let debtsPage=await request('/records');
         const debtSubject=debtsPage.items.find(r=>r.data.kind==='subject'&&r.data.title==='Теория вероятностей');
@@ -273,14 +274,14 @@ import UniformTypeIdentifiers
         await until(()=>document.querySelector('.subject-matches button'),'Existing subject suggestion missing');
         document.querySelector('.subject-matches button').click();
         await until(()=>document.querySelector('#debt-existing-subject')?.value===debtSubject.id,'Existing subject not selected');
-        document.querySelector('dialog .dialog-footer button').click();
+        document.querySelector('dialog .dialog-footer .primary').click();
         await until(()=>!document.querySelector('dialog'),'Existing subject debt failed');
         debtsPage=await request('/records');
         if(debtsPage.items.filter(r=>r.data.kind==='subject').length!==1||debtsPage.items.filter(r=>r.data.kind==='debt').length!==2)throw new Error('Existing subject duplicated');
         window.dispatchEvent(new Event('semestr:new-subject'));
         await until(()=>document.querySelector('dialog[open]'),'Native new subject menu failed');
         await fill(document.querySelector('dialog input'),'Математический анализ');
-        document.querySelector('dialog .dialog-footer button').click();
+        document.querySelector('dialog .dialog-footer .primary').click();
         await until(()=>!document.querySelector('dialog'),'Subject editor did not save');
         let page=await request('/records');
         const record=page.items.find(r=>r.data.title==='Математический анализ');
@@ -293,7 +294,7 @@ import UniformTypeIdentifiers
         const addNote=[...document.querySelectorAll('.dossier button')].find(b=>b.textContent.includes('Добавить заметку'));
         addNote.click();await until(()=>document.querySelector('dialog textarea'),'Note editor failed');
         await fill(document.querySelector('dialog textarea'),'Уточнить требования на консультации.');
-        document.querySelector('dialog .dialog-footer button').click();
+        document.querySelector('dialog .dialog-footer .primary').click();
         await until(()=>!document.querySelector('dialog'),'Note editor did not save');
         page=await request('/records');
         if(!page.items.some(r=>r.data.kind==='note'&&r.data.subjectId===record.id&&r.data.text.includes('консультации')))throw new Error('Note not persisted');
@@ -347,7 +348,7 @@ import UniformTypeIdentifiers
         const conditions=`Сдать две практические работы.\nЗащитить проект на консультации.\nФормат: короткая презентация и ответы на вопросы.`;
         const requirementsArea=[...document.querySelectorAll('dialog label')].find(l=>l.textContent.includes('Условия сдачи')).querySelector('textarea');
         await fill(requirementsArea,conditions);
-        document.querySelector('dialog .dialog-footer button').click();
+        document.querySelector('dialog .dialog-footer .primary').click();
         await until(()=>!document.querySelector('dialog')&&requirements()?.textContent.includes('две практические'),'Requirements save failed');
         if(requirements().querySelector('.requirements-text').textContent!==conditions||getComputedStyle(requirements().querySelector('.requirements-text')).whiteSpace!=='pre-wrap')throw new Error('Requirements line breaks lost');
         const openLesson=async()=>{
@@ -389,7 +390,7 @@ import UniformTypeIdentifiers
         const weekdayField=[...document.querySelectorAll('dialog label')].find(l=>l.textContent.includes('День недели')).querySelector('select');
         weekdayField.value=String(weekday);weekdayField.dispatchEvent(new Event('change',{bubbles:true}));
         await wait(50);
-        document.querySelector('dialog .dialog-footer button').click();
+        document.querySelector('dialog .dialog-footer .primary').click();
         await until(()=>!document.querySelector('dialog'),'Lesson save failed');
         page=await request('/records');
         const lesson=page.items.find(r=>r.data.kind==='lesson');
@@ -557,11 +558,59 @@ import UniformTypeIdentifiers
         if(orderedIDs()[0]!==addedTask.id)throw new Error('Edited deadline did not move homework to first place');
         const shownTime=document.querySelector('[data-task-id="'+homeworkFixtures[1].id+'"] time span').textContent;
         if(shownTime!==new Intl.DateTimeFormat('ru',{timeZone:(await request('/auth/session')).account.profile.timezone,hour:'2-digit',minute:'2-digit'}).format(new Date(homeworkFixtures[1].data.deadline)))throw new Error('Homework deadline uses wrong timezone');
+        window.semestrTestStage='editor layout';
+        const openTestDebt=async()=>{
+            [...document.querySelectorAll('nav button')].find(b=>b.textContent.includes('Долги')).click();
+            await until(()=>document.querySelector('.debt-group .status-tag'),'Debt edit button missing');
+            document.querySelector('.debt-group .status-tag').click();
+            await until(()=>document.querySelector('dialog input[name=nextStep]'),'Debt editor did not open');
+        };
+        await openTestDebt();
+        const dialog=document.querySelector('dialog');
+        if(!dialog.getAttribute('aria-labelledby')||!dialog.querySelector('.dialog-description')?.textContent)throw new Error('Editor title or subject context missing');
+        const reason=dialog.querySelector('select[name=reason]');
+        const deadline=dialog.querySelector('input[name=deadline]');
+        if(Math.abs(reason.getBoundingClientRect().height-deadline.getBoundingClientRect().height)>1||reason.getBoundingClientRect().height<42)throw new Error('Editor controls have inconsistent heights');
+        await fill(deadline,today);
+        await fill(dialog.querySelector('input[name=nextStep]'),'Уточнить формат сдачи');
+        await fill(dialog.querySelector('textarea[name=requirements]'),'Решить задачи 1–10 и подготовить короткую защиту.');
+        const extra=dialog.querySelector('.editor-details');extra.querySelector('summary').click();
+        await fill(dialog.querySelector('input[name=teacher]'),'Преподаватель курса');
+        await fill(dialog.querySelector('textarea[name=notes]'),'Отправить решение перед консультацией.');
+        const body=dialog.querySelector('.dialog-body');
+        const footer=dialog.querySelector('.dialog-footer');
+        const footerTop=footer.getBoundingClientRect().top;
+        body.scrollTop=body.scrollHeight;await wait(100);
+        if(Math.abs(footer.getBoundingClientRect().top-footerTop)>1||footer.getBoundingClientRect().bottom>innerHeight||dialog.scrollWidth>dialog.clientWidth+1||body.scrollWidth>body.clientWidth+1)throw new Error('Editor footer or horizontal layout is clipped');
+        dialog.querySelector('.dialog-actions .outline').click();
+        await until(()=>!document.querySelector('dialog'),'Editor cancel failed');
+        await openTestDebt();
+        if(document.querySelector('dialog textarea[name=notes]').value!=='Отправить решение перед консультацией.')throw new Error('Collapsed-field draft lost on cancel');
+        document.querySelector('dialog .dialog-footer .primary').click();
+        await until(()=>!document.querySelector('dialog'),'Footer did not submit its form');
+        const editedDebt=(await request('/records')).items.find(r=>r.data.kind==='debt'&&r.data.nextStep==='Уточнить формат сдачи');
+        if(!editedDebt||editedDebt.data.teacher!=='Преподаватель курса'||editedDebt.data.deadline!==today)throw new Error('Debt details did not persist');
+        await openAssignments();
+        document.querySelector('[data-task-id="'+addedTask.id+'"]').click();
+        await until(()=>document.querySelector('dialog .editor-materials'),'Homework materials missing');
+        const materials=document.querySelector('dialog .editor-materials');
+        const materialDetails=materials.closest('details');materialDetails.open=true;
+        materials.querySelector('.text-button').click();await wait(100);
+        materialDetails.open=false;
+        document.querySelector('dialog .dialog-footer .primary').click();await wait(100);
+        if(!materialDetails.open||!document.querySelector('dialog'))throw new Error('Invalid collapsed fields did not reopen');
+        await fill(materials.querySelector('[aria-label="Название ссылки"]'),'Материалы к заданию');
+        await fill(materials.querySelector('[aria-label="Адрес ссылки"]'),'https://example.com/homework');
+        document.querySelector('dialog .dialog-footer .primary').click();
+        await until(()=>!document.querySelector('dialog'),'Validated materials did not save');
+        if((await request('/records')).items.find(r=>r.id===addedTask.id).data.links.length!==1)throw new Error('Materials were lost');
         const savedNotice=document.querySelector('.saved-file-heading button');if(savedNotice)savedNotice.click();
         [...document.querySelectorAll('.sidebar-bottom button')].find(b=>b.textContent.includes('Настройки')).click();
         await until(()=>document.querySelector('.data-transfer'),'Settings not restored after homework test');
         const scrollSection=selector=>{const area=document.querySelector('.workspace');const section=document.querySelector(selector);area.scrollTop+=section.getBoundingClientRect().top-area.getBoundingClientRect().top-80};
-        if(testView==='tasks'){
+        if(testView==='editor'){
+            await openTestDebt();document.querySelector('dialog .dialog-body').scrollTop=0;
+        }else if(testView==='tasks'){
             await openAssignments();document.querySelector('.workspace').scrollTop=0;
         }else if(testView==='transfer'){
             document.querySelector('.choose-data-file').click();
@@ -584,7 +633,7 @@ import UniformTypeIdentifiers
             await clickTime(field);await clickTime(field);
         }
         await wait(350);
-        return {assignments:true,homeworkDeadlineOrder:true,homeworkSearch:true,homeworkFilters:true,homeworkEditing:true,homeworkTimezone:true,subjectSaved:true,noteSaved:true,profileSaved:true,themes:true,settingsFileRoundtrip:true,previewCancellation:true,studyDataPreserved:true,titleOnlyDebt:true,debtDraftRestored:true,existingSubjectReused:true,requirements:true,timeClickToggle:true,timeKeyboard:true,timePasteValidation:true,lessonTimesPersisted:true,calendarTypes:true,practiceEmphasis:true,examsFirst:true,notifications:true,notificationDisable:true,notificationSettingsTransfer:true,theme:testTheme,updates:true,updatePreference:true,updateDownload:true,exportReceipt:true,finderReveal:true,studyFileRoundtrip:true,importPreview:true,importCancellation:true,networkResources:performance.getEntriesByType('resource').filter(r=>/^https?:/.test(r.name)).length};
+        return {editorLayout:true,editorDraft:true,editorValidation:true,assignments:true,homeworkDeadlineOrder:true,homeworkSearch:true,homeworkFilters:true,homeworkEditing:true,homeworkTimezone:true,subjectSaved:true,noteSaved:true,profileSaved:true,themes:true,settingsFileRoundtrip:true,previewCancellation:true,studyDataPreserved:true,titleOnlyDebt:true,debtDraftRestored:true,existingSubjectReused:true,requirements:true,timeClickToggle:true,timeKeyboard:true,timePasteValidation:true,lessonTimesPersisted:true,calendarTypes:true,practiceEmphasis:true,examsFirst:true,notifications:true,notificationDisable:true,notificationSettingsTransfer:true,theme:testTheme,updates:true,updatePreference:true,updateDownload:true,exportReceipt:true,finderReveal:true,studyFileRoundtrip:true,importPreview:true,importCancellation:true,networkResources:performance.getEntriesByType('resource').filter(r=>/^https?:/.test(r.name)).length};
         """
         webView.callAsyncJavaScript(script,arguments:["testTheme":ProcessInfo.processInfo.environment["SEMESTR_TEST_THEME"] ?? "dark","testView":ProcessInfo.processInfo.environment["SEMESTR_TEST_VIEW"] ?? "calendar"],in:nil,in:.page){result in
             switch result {
